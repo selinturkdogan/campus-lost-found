@@ -19,21 +19,22 @@ class ListingsProvider extends ChangeNotifier {
   String? _errorMessage;
   String _searchQuery = '';
   String? _selectedLocation;
+  String? _selectedCategory;
 
   StreamSubscription? _lostSub;
   StreamSubscription? _foundSub;
 
   List<ListingModel> get lostListings => _filterListings(_lostListings);
-  List<ListingModel> get allListings => [..._lostListings, ..._foundListings];
   List<ListingModel> get foundListings => _filterListings(_foundListings);
+  List<ListingModel> get allListings => [..._lostListings, ..._foundListings];
   List<ListingModel> get cachedListings => _cachedListings;
   bool get isLoading => _isLoading;
   bool get isOffline => _isOffline;
   String? get errorMessage => _errorMessage;
   String get searchQuery => _searchQuery;
   String? get selectedLocation => _selectedLocation;
+  String? get selectedCategory => _selectedCategory;
 
-  // ── Check real internet connectivity ────────────────────────────────────────
   Future<bool> _hasInternet() async {
     try {
       final result = await InternetAddress.lookup('google.com')
@@ -44,7 +45,6 @@ class ListingsProvider extends ChangeNotifier {
     }
   }
 
-  // ── Start real-time Firestore streams ────────────────────────────────────────
   void startListening() {
     _setLoading(true);
 
@@ -84,7 +84,6 @@ class ListingsProvider extends ChangeNotifier {
     _foundSub?.cancel();
   }
 
-  // ── Create listing ───────────────────────────────────────────────────────────
   Future<bool> createListing({
     required String title,
     required String description,
@@ -98,12 +97,10 @@ class ListingsProvider extends ChangeNotifier {
   }) async {
     try {
       final docRef = _firestore.collection('listings').doc();
-
       String? photoUrl;
       if (imageFile != null) {
         photoUrl = await _uploadPhoto(imageFile, ownerId, docRef.id);
       }
-
       await docRef.set({
         'title': title,
         'description': description,
@@ -125,7 +122,6 @@ class ListingsProvider extends ChangeNotifier {
     }
   }
 
-  // ── Update listing ───────────────────────────────────────────────────────────
   Future<bool> updateListing({
     required String listingId,
     required String title,
@@ -142,7 +138,6 @@ class ListingsProvider extends ChangeNotifier {
       if (newImageFile != null) {
         photoUrl = await _uploadPhoto(newImageFile, ownerId, listingId);
       }
-
       await _firestore.collection('listings').doc(listingId).update({
         'title': title,
         'description': description,
@@ -160,13 +155,10 @@ class ListingsProvider extends ChangeNotifier {
     }
   }
 
-  // ── Delete listing ───────────────────────────────────────────────────────────
   Future<bool> deleteListing(String listingId, String ownerId) async {
     try {
       try {
-        await _storage
-            .ref('listing_images/$ownerId/$listingId.jpg')
-            .delete();
+        await _storage.ref('listing_images/$ownerId/$listingId.jpg').delete();
       } catch (_) {}
       await _firestore.collection('listings').doc(listingId).delete();
       return true;
@@ -177,7 +169,6 @@ class ListingsProvider extends ChangeNotifier {
     }
   }
 
-  // ── Mark as resolved ─────────────────────────────────────────────────────────
   Future<bool> markResolved(String listingId) async {
     try {
       await _firestore.collection('listings').doc(listingId).update({
@@ -192,7 +183,6 @@ class ListingsProvider extends ChangeNotifier {
     }
   }
 
-  // ── My posts query ───────────────────────────────────────────────────────────
   Stream<List<ListingModel>> myPostsStream(String uid) {
     return _firestore
         .collection('listings')
@@ -213,9 +203,15 @@ class ListingsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setCategoryFilter(String? category) {
+    _selectedCategory = category;
+    notifyListeners();
+  }
+
   void clearFilters() {
     _searchQuery = '';
     _selectedLocation = null;
+    _selectedCategory = null;
     notifyListeners();
   }
 
@@ -226,11 +222,12 @@ class ListingsProvider extends ChangeNotifier {
           l.description.toLowerCase().contains(_searchQuery);
       final matchesLocation =
           _selectedLocation == null || l.location == _selectedLocation;
-      return matchesSearch && matchesLocation;
+      final matchesCategory =
+          _selectedCategory == null || l.category == _selectedCategory;
+      return matchesSearch && matchesLocation && matchesCategory;
     }).toList();
   }
 
-  // ── Hive caching ─────────────────────────────────────────────────────────────
   Future<void> _cacheListings(List<ListingModel> listings) async {
     try {
       final box = Hive.box<ListingModel>('recentListings');
@@ -246,27 +243,23 @@ class ListingsProvider extends ChangeNotifier {
       _cachedListings = box.values.toList()
         ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
       _lostListings = _cachedListings.where((l) => l.type == 'lost').toList();
-      _foundListings =
-          _cachedListings.where((l) => l.type == 'found').toList();
+      _foundListings = _cachedListings.where((l) => l.type == 'found').toList();
       notifyListeners();
     } catch (_) {}
   }
 
-  // ── Upload photo ─────────────────────────────────────────────────────────────
   Future<String?> _uploadPhoto(File file, String uid, String listingId) async {
     final ref = _storage.ref('listing_images/$uid/$listingId.jpg');
     final task = await ref.putFile(file);
     return await task.ref.getDownloadURL();
   }
 
-  // ── Error handling — only show offline if truly no internet ─────────────────
   void _handleStreamError(dynamic e) async {
     final online = await _hasInternet();
     if (!online) {
       _isOffline = true;
       loadFromCache();
     }
-    // If online but Firestore error — don't show offline banner
     _setLoading(false);
   }
 

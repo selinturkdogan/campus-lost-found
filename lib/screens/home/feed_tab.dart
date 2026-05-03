@@ -15,7 +15,7 @@ class FeedTab extends StatefulWidget {
 class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
   late final TabController _tabCtrl;
   final _searchCtrl = TextEditingController();
-  String _activeTab = 'all'; // all, lost, found
+  String _activeTab = 'all';
 
   @override
   void initState() {
@@ -23,9 +23,7 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
     _tabCtrl = TabController(length: 3, vsync: this);
     _tabCtrl.addListener(() {
       if (!_tabCtrl.indexIsChanging) {
-        setState(() {
-          _activeTab = ['all', 'lost', 'found'][_tabCtrl.index];
-        });
+        setState(() => _activeTab = ['all', 'lost', 'found'][_tabCtrl.index]);
       }
     });
   }
@@ -45,12 +43,10 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
     return SafeArea(
       child: Column(
         children: [
-          // ── Sticky header ──────────────────────────────────────────────
           Container(
             color: scheme.surface,
             child: Column(
               children: [
-                // Title bar
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                   child: Row(
@@ -80,15 +76,15 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
                         icon: Consumer<ListingsProvider>(
                           builder: (_, provider, __) => Icon(
                             Icons.tune_rounded,
-                            color: provider.selectedLocation != null ? scheme.primary : scheme.onSurfaceVariant,
+                            color: (provider.selectedLocation != null || provider.selectedCategory != null)
+                                ? scheme.primary
+                                : scheme.onSurfaceVariant,
                           ),
                         ),
                       ),
                     ],
                   ),
                 ),
-
-                // Tabs
                 Container(
                   decoration: BoxDecoration(
                     border: Border(bottom: BorderSide(color: scheme.outline, width: 1)),
@@ -103,6 +99,51 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
             ),
           ),
 
+          // Active filter chips row
+          Consumer<ListingsProvider>(
+            builder: (_, provider, __) {
+              final hasFilters = provider.selectedLocation != null || provider.selectedCategory != null;
+              if (!hasFilters) return const SizedBox.shrink();
+              return Container(
+                color: scheme.surface,
+                padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+                child: Row(
+                  children: [
+                    if (provider.selectedLocation != null)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: Chip(
+                          label: Text(provider.selectedLocation!, style: const TextStyle(fontSize: 12)),
+                          deleteIcon: const Icon(Icons.close, size: 14),
+                          onDeleted: () => provider.setLocationFilter(null),
+                          visualDensity: VisualDensity.compact,
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ),
+                    if (provider.selectedCategory != null)
+                      Chip(
+                        label: Text(provider.selectedCategory!, style: const TextStyle(fontSize: 12)),
+                        deleteIcon: const Icon(Icons.close, size: 14),
+                        onDeleted: () => provider.setCategoryFilter(null),
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: provider.clearFilters,
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text('Clear all', style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+
           // Offline banner
           Consumer<ListingsProvider>(
             builder: (_, provider, __) {
@@ -115,14 +156,14 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
                   children: [
                     const Icon(Icons.wifi_off_rounded, size: 14, color: Colors.orange),
                     const SizedBox(width: 8),
-                    const Text('Offline — showing cached listings', style: TextStyle(fontSize: 12, color: Colors.orange)),
+                    const Text('Offline — showing cached listings',
+                        style: TextStyle(fontSize: 12, color: Colors.orange)),
                   ],
                 ),
               );
             },
           ),
 
-          // Listings
           Expanded(
             child: Consumer<ListingsProvider>(
               builder: (_, provider, __) {
@@ -158,7 +199,9 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
   void _showFilterSheet(BuildContext context) {
     showModalBottomSheet(
       context: context,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (_) => _FilterSheet(),
     );
   }
@@ -183,19 +226,14 @@ class _ListingsList extends StatelessWidget {
           separatorBuilder: (_, __) => const SizedBox(height: 8),
           itemBuilder: (_, __) => Container(
             height: 80,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(10),
-            ),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
           ),
         ),
       );
     }
 
     if (listings.isEmpty) {
-      return Center(
-        child: Text(emptyMessage, style: Theme.of(context).textTheme.bodySmall),
-      );
+      return Center(child: Text(emptyMessage, style: Theme.of(context).textTheme.bodySmall));
     }
 
     return ListView.separated(
@@ -212,42 +250,79 @@ class _FilterSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final provider = context.watch<ListingsProvider>();
     final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
 
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text('Filter by location', style: Theme.of(context).textTheme.titleMedium),
-              const Spacer(),
-              if (provider.selectedLocation != null)
-                TextButton(
-                  onPressed: () { provider.clearFilters(); Navigator.pop(context); },
-                  child: const Text('Clear'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: campusLocations.map((loc) {
-              final selected = provider.selectedLocation == loc;
-              return FilterChip(
-                label: Text(loc),
-                selected: selected,
-                onSelected: (_) {
-                  provider.setLocationFilter(selected ? null : loc);
-                  Navigator.pop(context);
-                },
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 16),
-        ],
+    return DraggableScrollableSheet(
+      initialChildSize: 0.6,
+      minChildSize: 0.4,
+      maxChildSize: 0.9,
+      expand: false,
+      builder: (_, scrollCtrl) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        child: ListView(
+          controller: scrollCtrl,
+          children: [
+            Center(
+              child: Container(
+                width: 40, height: 4,
+                decoration: BoxDecoration(color: scheme.outline, borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Text('Filters', style: textTheme.titleMedium),
+                const Spacer(),
+                if (provider.selectedLocation != null || provider.selectedCategory != null)
+                  TextButton(
+                    onPressed: () { provider.clearFilters(); Navigator.pop(context); },
+                    child: const Text('Clear all'),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 20),
+
+            // Location
+            Text('Location', style: textTheme.titleSmall),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8, runSpacing: 8,
+              children: campusLocations.map((loc) {
+                final selected = provider.selectedLocation == loc;
+                return FilterChip(
+                  label: Text(loc, style: const TextStyle(fontSize: 12)),
+                  selected: selected,
+                  onSelected: (_) => provider.setLocationFilter(selected ? null : loc),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 24),
+
+            // Category
+            Text('Category', style: textTheme.titleSmall),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8, runSpacing: 8,
+              children: itemCategories.map((cat) {
+                final selected = provider.selectedCategory == cat;
+                return FilterChip(
+                  label: Text(cat, style: const TextStyle(fontSize: 12)),
+                  selected: selected,
+                  onSelected: (_) => provider.setCategoryFilter(selected ? null : cat),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 24),
+
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Apply'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -263,8 +338,10 @@ class _ListingSearchDelegate extends SearchDelegate {
   ];
 
   @override
-  Widget buildLeading(BuildContext context) =>
-    IconButton(icon: const Icon(Icons.arrow_back), onPressed: () { provider.setSearchQuery(''); close(context, null); });
+  Widget buildLeading(BuildContext context) => IconButton(
+    icon: const Icon(Icons.arrow_back),
+    onPressed: () { provider.setSearchQuery(''); close(context, null); },
+  );
 
   @override
   Widget buildResults(BuildContext context) => _buildList(context);
