@@ -1,4 +1,4 @@
-# Campus Lost & Found
+#  Campus Lost & Found
 
 A university-specific mobile application where students can post lost or found items, browse active listings, and contact item owners — built with Flutter and Firebase.
 
@@ -9,10 +9,10 @@ A university-specific mobile application where students can post lost or found i
 - Browse lost and found listings in real-time with Lost, Found, and All tabs
 - Post a listing with title, description, category, campus location, and optional photo
 - Edit, delete, and mark your own listings as resolved
-- Search listings by keyword or filter by campus location
-- In-app messaging — send messages to item posters directly from the listing detail
-- Messages inbox — view all incoming messages across your listings
-- Push notifications when someone messages you or a new listing is posted
+- Search listings by keyword or filter by campus location or category
+- Real-time in-app chat — send and receive messages instantly with item posters
+- Messages inbox — view all your active chats across listings from the Profile screen
+- Push notifications via Firebase Cloud Functions — receive a notification when someone messages you
 - Google Maps pin showing where the item was lost or found on campus
 - Admin panel for moderating and removing inappropriate listings
 - Offline browsing support via local cache
@@ -29,7 +29,7 @@ A university-specific mobile application where students can post lost or found i
 | Backend | Firebase Firestore |
 | Authentication | Firebase Auth |
 | Storage | Firebase Storage |
-| Push Notifications | Firebase Cloud Messaging (FCM) |
+| Push Notifications | Firebase Cloud Messaging (FCM) + Cloud Functions |
 | Local Cache | Hive |
 | Maps | Google Maps Flutter |
 | Image Loading | Cached Network Image |
@@ -53,6 +53,8 @@ lib/
 │   │   └── admin_panel_screen.dart
 │   ├── auth/
 │   │   └── login_screen.dart
+│   ├── chat/
+│   │   └── chat_screen.dart
 │   ├── detail/
 │   │   └── listing_detail_screen.dart
 │   ├── home/
@@ -74,6 +76,9 @@ lib/
 │   └── app_theme.dart
 └── widgets/
     └── listing_card.dart
+
+functions/
+└── index.js   # Firebase Cloud Function for push notifications
 ```
 
 ---
@@ -106,4 +111,12 @@ Connect a physical Android device via USB with USB debugging enabled, then:
 
 ```bash
 flutter run
+```
+
+### 5. Deploy Cloud Functions (optional)
+
+To enable push notifications, deploy the included Firebase Cloud Function:
+
+```bash
+firebase deploy --only functions
 ```
