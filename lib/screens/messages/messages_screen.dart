@@ -3,8 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../../providers/auth_provider.dart';
-import '../../models/listing_model.dart';
-import '../detail/listing_detail_screen.dart';
+import '../chat/chat_screen.dart';
 
 class MessagesScreen extends StatelessWidget {
   const MessagesScreen({super.key});
@@ -40,38 +39,7 @@ class MessagesScreen extends StatelessWidget {
             ),
 
             Expanded(
-              child: StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance
-                    .collection('listings')
-                    .where('ownerId', isEqualTo: auth.user!.uid)
-                    .snapshots(),
-                builder: (context, listingSnap) {
-                  if (!listingSnap.hasData) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-
-                  final listings = listingSnap.data!.docs
-                      .map(ListingModel.fromFirestore)
-                      .toList();
-
-                  if (listings.isEmpty) {
-                    return Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.message_outlined, size: 48, color: scheme.onSurfaceVariant),
-                          const SizedBox(height: 12),
-                          Text('No messages yet.', style: textTheme.bodyMedium),
-                          const SizedBox(height: 4),
-                          Text('Messages from your listings will appear here.', style: textTheme.bodySmall, textAlign: TextAlign.center),
-                        ],
-                      ),
-                    );
-                  }
-
-                  return _ListingMessagesList(listings: listings);
-                },
-              ),
+              child: _AllChatsView(uid: auth.user!.uid),
             ),
           ],
         ),
@@ -80,165 +48,206 @@ class MessagesScreen extends StatelessWidget {
   }
 }
 
-class _ListingMessagesList extends StatelessWidget {
-  final List<ListingModel> listings;
-  const _ListingMessagesList({required this.listings});
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-      itemCount: listings.length,
-      itemBuilder: (context, i) {
-        final listing = listings[i];
-        return _ListingMessageCard(listing: listing);
-      },
-    );
-  }
-}
-
-class _ListingMessageCard extends StatelessWidget {
-  final ListingModel listing;
-  const _ListingMessageCard({required this.listing});
+class _AllChatsView extends StatelessWidget {
+  final String uid;
+  const _AllChatsView({required this.uid});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    final isLost = listing.type == 'lost';
+
+    // Get all listings owned by the user or where user is a participant
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('listings')
+          .snapshots(),
+      builder: (context, listingSnap) {
+        if (!listingSnap.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final listings = listingSnap.data!.docs;
+
+        return ListView.builder(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+          itemCount: listings.length,
+          itemBuilder: (context, i) {
+            final listingData = listings[i].data() as Map<String, dynamic>;
+            final listingId = listings[i].id;
+            final listingTitle = listingData['title'] ?? '';
+
+            return _ListingChatsCard(
+              uid: uid,
+              listingId: listingId,
+              listingTitle: listingTitle,
+              listingData: listingData,
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _ListingChatsCard extends StatelessWidget {
+  final String uid;
+  final String listingId;
+  final String listingTitle;
+  final Map<String, dynamic> listingData;
+
+  const _ListingChatsCard({
+    required this.uid,
+    required this.listingId,
+    required this.listingTitle,
+    required this.listingData,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final isLost = listingData['type'] == 'lost';
 
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('listings')
-          .doc(listing.id)
-          .collection('messages')
-          .orderBy('createdAt', descending: true)
+          .doc(listingId)
+          .collection('chats')
           .snapshots(),
-      builder: (context, msgSnap) {
-        if (!msgSnap.hasData) return const SizedBox.shrink();
+      builder: (context, chatSnap) {
+        if (!chatSnap.hasData) return const SizedBox.shrink();
 
-        final messages = msgSnap.data!.docs;
-        if (messages.isEmpty) return const SizedBox.shrink();
+        // Filter chats where current user is a participant
+        final chats = chatSnap.data!.docs.where((doc) {
+          final data = doc.data() as Map<String, dynamic>;
+          final participants = List<String>.from(data['participants'] ?? []);
+          return participants.contains(uid);
+        }).toList();
 
-        return Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          decoration: BoxDecoration(
-            color: scheme.surface,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: scheme.outline.withOpacity(0.5)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Listing header
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: (isLost ? const Color(0xFFFF6B6B) : const Color(0xFF4CAF50)).withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        isLost ? 'Lost' : 'Found',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: isLost ? const Color(0xFFFF6B6B) : const Color(0xFF4CAF50),
-                        ),
+        if (chats.isEmpty) return const SizedBox.shrink();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Listing header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 16, 4, 8),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: (isLost ? const Color(0xFFFF6B6B) : const Color(0xFF4CAF50)).withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      isLost ? 'Lost' : 'Found',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: isLost ? const Color(0xFFFF6B6B) : const Color(0xFF4CAF50),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(listing.title, style: textTheme.titleSmall, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      listingTitle,
+                      style: textTheme.titleSmall,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    Text('${messages.length} msg${messages.length > 1 ? 's' : ''}',
-                        style: textTheme.bodySmall?.copyWith(color: scheme.primary)),
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: () => Navigator.push(context, MaterialPageRoute(
-                        builder: (_) => ListingDetailScreen(listing: listing),
-                      )),
-                      child: Icon(Icons.arrow_forward_ios_rounded, size: 14, color: scheme.onSurfaceVariant),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-              Divider(height: 1, color: scheme.outline.withOpacity(0.3)),
+            ),
 
-              // Messages list
-              ...messages.take(3).map((doc) {
-                final data = doc.data() as Map<String, dynamic>;
-                final createdAt = (data['createdAt'] as Timestamp?)?.toDate();
-                return Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+            // Chat items
+            ...chats.map((chat) {
+              final data = chat.data() as Map<String, dynamic>;
+              final participantNames = Map<String, dynamic>.from(data['participantNames'] ?? {});
+              final otherUserId = (data['participants'] as List?)
+                  ?.firstWhere((id) => id != uid, orElse: () => '')
+                  ?.toString() ?? '';
+              final otherUserName = participantNames[otherUserId]?.toString() ?? 'Unknown';
+              final lastMessage = data['lastMessage']?.toString() ?? '';
+              final lastMessageAt = (data['lastMessageAt'] as Timestamp?)?.toDate();
+
+              return GestureDetector(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ChatScreen(
+                      listingId: listingId,
+                      listingTitle: listingTitle,
+                      otherUserId: otherUserId,
+                      otherUserName: otherUserName,
+                    ),
+                  ),
+                ),
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: scheme.surface,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: scheme.outline.withOpacity(0.5)),
+                  ),
                   child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Container(
-                        width: 32, height: 32,
+                        width: 42, height: 42,
                         decoration: BoxDecoration(
                           color: scheme.primary.withOpacity(0.15),
                           shape: BoxShape.circle,
                         ),
                         child: Center(
                           child: Text(
-                            (data['senderName'] as String? ?? 'U')[0].toUpperCase(),
-                            style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w600, fontSize: 13),
+                            otherUserName.isNotEmpty ? otherUserName[0].toUpperCase() : '?',
+                            style: TextStyle(
+                              color: scheme.primary,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 16,
+                            ),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 10),
+                      const SizedBox(width: 12),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
-                              children: [
-                                Text(data['senderName'] ?? 'Unknown', style: textTheme.titleSmall),
-                                const Spacer(),
-                                if (createdAt != null)
-                                  Text(DateFormat('MMM d, h:mm a').format(createdAt), style: textTheme.bodySmall),
-                              ],
-                            ),
+                            Text(otherUserName, style: textTheme.titleSmall),
                             const SizedBox(height: 2),
                             Text(
-                              data['text'] ?? '',
-                              style: textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
-                              maxLines: 2,
+                              lastMessage.isEmpty ? 'No messages yet' : lastMessage,
+                              style: textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                              maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
-                            const SizedBox(height: 2),
-                            Text(data['senderEmail'] ?? '', style: textTheme.bodySmall?.copyWith(color: scheme.primary)),
                           ],
                         ),
                       ),
+                      const SizedBox(width: 8),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          if (lastMessageAt != null)
+                            Text(
+                              DateFormat('h:mm a').format(lastMessageAt),
+                              style: textTheme.bodySmall,
+                            ),
+                          const SizedBox(height: 4),
+                          Icon(Icons.arrow_forward_ios_rounded, size: 12, color: scheme.onSurfaceVariant),
+                        ],
+                      ),
                     ],
                   ),
-                );
-              }),
-
-              if (messages.length > 3) ...[
-                Divider(height: 1, color: scheme.outline.withOpacity(0.3)),
-                Padding(
-                  padding: const EdgeInsets.all(10),
-                  child: GestureDetector(
-                    onTap: () => Navigator.push(context, MaterialPageRoute(
-                      builder: (_) => ListingDetailScreen(listing: listing),
-                    )),
-                    child: Center(
-                      child: Text(
-                        'View all ${messages.length} messages',
-                        style: textTheme.bodySmall?.copyWith(color: scheme.primary, fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ),
                 ),
-              ],
-            ],
-          ),
+              );
+            }),
+          ],
         );
       },
     );
