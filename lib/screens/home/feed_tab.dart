@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shimmer/shimmer.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../providers/listings_provider.dart';
+import '../../providers/auth_provider.dart';
 import '../../models/listing_model.dart';
 import '../../widgets/listing_card.dart';
+import '../notifications/notifications_screen.dart';
 
 class FeedTab extends StatefulWidget {
   const FeedTab({super.key});
@@ -31,6 +34,7 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
+    final auth = context.watch<AuthProvider>();
 
     return SafeArea(
       child: Column(
@@ -74,6 +78,9 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
                           ),
                         ),
                       ),
+                      // Bell icon with badge
+                      if (auth.isAuthenticated)
+                        _NotificationBell(uid: auth.user!.uid),
                     ],
                   ),
                 ),
@@ -160,18 +167,9 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
             child: TabBarView(
               controller: _tabCtrl,
               children: [
-                _PaginatedList(
-                  type: 'all',
-                  emptyMessage: 'No items posted yet.',
-                ),
-                _PaginatedList(
-                  type: 'lost',
-                  emptyMessage: 'No lost items reported.',
-                ),
-                _PaginatedList(
-                  type: 'found',
-                  emptyMessage: 'No found items reported.',
-                ),
+                _PaginatedList(type: 'all', emptyMessage: 'No items posted yet.'),
+                _PaginatedList(type: 'lost', emptyMessage: 'No lost items reported.'),
+                _PaginatedList(type: 'found', emptyMessage: 'No found items reported.'),
               ],
             ),
           ),
@@ -191,10 +189,74 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
   }
 }
 
-// ── Paginated List ────────────────────────────────────────────────────────────
+// ── Notification Bell ─────────────────────────────────────────────────────────
+
+class _NotificationBell extends StatelessWidget {
+  final String uid;
+  const _NotificationBell({required this.uid});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('notifications')
+          .where('read', isEqualTo: false)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final unreadCount = snapshot.data?.docs.length ?? 0;
+
+        return GestureDetector(
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(
+                  unreadCount > 0
+                      ? Icons.notifications_rounded
+                      : Icons.notifications_none_rounded,
+                  color: unreadCount > 0 ? scheme.primary : scheme.onSurfaceVariant,
+                  size: 24,
+                ),
+                if (unreadCount > 0)
+                  Positioned(
+                    right: -4,
+                    top: -4,
+                    child: Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: const BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                      ),
+                      constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                      child: Text(
+                        unreadCount > 9 ? '9+' : '$unreadCount',
+                        style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w700),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ── Paginated List ─────────────────────────────────────────────────────────────
 
 class _PaginatedList extends StatefulWidget {
-  final String type; // 'all', 'lost', 'found'
+  final String type;
   final String emptyMessage;
 
   const _PaginatedList({required this.type, required this.emptyMessage});

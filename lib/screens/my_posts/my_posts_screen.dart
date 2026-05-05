@@ -180,19 +180,111 @@ class _ListingsList extends StatelessWidget {
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (_, i) {
         final listing = listings[i];
-        return ListingCard(
-          listing: listing,
-          showOwnerActions: true,
-          onEdit: () => Navigator.pushNamed(context, AppRoutes.postForm, arguments: listing),
-          onDelete: () async {
-            final auth = context.read<AuthProvider>();
-            await context.read<ListingsProvider>().deleteListing(listing.id, auth.user!.uid);
-          },
-          onResolve: listing.isResolved
-              ? null
-              : () async {
-                  await context.read<ListingsProvider>().markResolved(listing.id);
+        return Column(
+          children: [
+            // Expiry warning banner
+            if (!listing.isResolved) _ExpiryBanner(listing: listing),
+            ListingCard(
+              listing: listing,
+              showOwnerActions: true,
+              onEdit: () => Navigator.pushNamed(context, AppRoutes.postForm, arguments: listing),
+              onDelete: () async {
+                final auth = context.read<AuthProvider>();
+                await context.read<ListingsProvider>().deleteListing(listing.id, auth.user!.uid);
+              },
+              onResolve: listing.isResolved
+                  ? null
+                  : () async {
+                      await context.read<ListingsProvider>().markResolved(listing.id);
+                    },
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ExpiryBanner extends StatelessWidget {
+  final ListingModel listing;
+  const _ExpiryBanner({required this.listing});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    // Get expiresAt from Firestore directly via stream
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('listings')
+          .doc(listing.id)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const SizedBox.shrink();
+
+        final data = snapshot.data!.data() as Map<String, dynamic>?;
+        if (data == null) return const SizedBox.shrink();
+
+        final expiresAt = (data['expiresAt'] as Timestamp?)?.toDate();
+        if (expiresAt == null) return const SizedBox.shrink();
+
+        final daysLeft = expiresAt.difference(DateTime.now()).inDays;
+
+        // Only show banner if 7 days or less remaining
+        if (daysLeft > 7) return const SizedBox.shrink();
+
+        final isExpired = daysLeft < 0;
+        final color = isExpired ? Colors.red : Colors.orange;
+        final message = isExpired
+            ? 'This listing has expired!'
+            : daysLeft == 0
+                ? 'Expires today!'
+                : '$daysLeft day${daysLeft == 1 ? '' : 's'} left before expiry';
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 4),
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(12),
+              topRight: Radius.circular(12),
+            ),
+            border: Border.all(color: color.withOpacity(0.3)),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.access_time_rounded, size: 16, color: color),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  message,
+                  style: textTheme.bodySmall?.copyWith(color: color, fontWeight: FontWeight.w600),
+                ),
+              ),
+              TextButton(
+                onPressed: () async {
+                  final success = await context.read<ListingsProvider>().extendListing(listing.id);
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(success ? 'Listing extended by 60 days!' : 'Failed to extend listing.'),
+                        backgroundColor: success ? Colors.green : Colors.red,
+                      ),
+                    );
+                  }
                 },
+                style: TextButton.styleFrom(
+                  foregroundColor: color,
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('Extend', style: TextStyle(fontWeight: FontWeight.w700)),
+              ),
+            ],
+          ),
         );
       },
     );

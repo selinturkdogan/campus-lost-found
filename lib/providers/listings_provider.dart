@@ -12,17 +12,28 @@ class ListingsProvider extends ChangeNotifier {
 
   static const int _pageSize = 10;
 
+  // All listings (for All tab)
+  List<ListingModel> _allListings = [];
+  DocumentSnapshot? _lastAllDoc;
+  bool _hasMoreAll = true;
+  bool _isLoadingMoreAll = false;
+  StreamSubscription? _allSub;
+
+  // Lost listings
   List<ListingModel> _lostListings = [];
-  List<ListingModel> _foundListings = [];
-  List<ListingModel> _cachedListings = [];
-
   DocumentSnapshot? _lastLostDoc;
-  DocumentSnapshot? _lastFoundDoc;
-
   bool _hasMoreLost = true;
-  bool _hasMoreFound = true;
   bool _isLoadingMoreLost = false;
+  StreamSubscription? _lostSub;
+
+  // Found listings
+  List<ListingModel> _foundListings = [];
+  DocumentSnapshot? _lastFoundDoc;
+  bool _hasMoreFound = true;
   bool _isLoadingMoreFound = false;
+  StreamSubscription? _foundSub;
+
+  List<ListingModel> _cachedListings = [];
 
   bool _isLoading = false;
   bool _isOffline = false;
@@ -31,25 +42,21 @@ class ListingsProvider extends ChangeNotifier {
   String? _selectedLocation;
   String? _selectedCategory;
 
-  StreamSubscription? _lostSub;
-  StreamSubscription? _foundSub;
-
+  // Getters
+  List<ListingModel> get allListings => _filterListings(_allListings);
   List<ListingModel> get lostListings => _filterListings(_lostListings);
   List<ListingModel> get foundListings => _filterListings(_foundListings);
-  List<ListingModel> get allListings {
-    final all = [..._lostListings, ..._foundListings];
-    all.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    return _filterListings(all);
-  }
-
   List<ListingModel> get cachedListings => _cachedListings;
+
   bool get isLoading => _isLoading;
   bool get isOffline => _isOffline;
+  bool get isLoadingMoreAll => _isLoadingMoreAll;
   bool get isLoadingMoreLost => _isLoadingMoreLost;
   bool get isLoadingMoreFound => _isLoadingMoreFound;
+  bool get hasMoreAll => _hasMoreAll;
   bool get hasMoreLost => _hasMoreLost;
   bool get hasMoreFound => _hasMoreFound;
-  bool get hasMoreAll => _hasMoreLost || _hasMoreFound;
+
   String? get errorMessage => _errorMessage;
   String get searchQuery => _searchQuery;
   String? get selectedLocation => _selectedLocation;
@@ -68,11 +75,72 @@ class ListingsProvider extends ChangeNotifier {
   void startListening() {
     _setLoading(true);
     Future.wait([
+      _loadInitialAll(),
       _loadInitialLost(),
       _loadInitialFound(),
     ]).then((_) => _setLoading(false));
   }
 
+  // ── All listings ─────────────────────────────────────────────────────────────
+  Future<void> _loadInitialAll() async {
+    try {
+      final snap = await _firestore
+          .collection('listings')
+          .where('isResolved', isEqualTo: false)
+          .orderBy('createdAt', descending: true)
+          .limit(_pageSize)
+          .get();
+
+      _allListings = snap.docs.map(ListingModel.fromFirestore).toList();
+      _lastAllDoc = snap.docs.isNotEmpty ? snap.docs.last : null;
+      _hasMoreAll = snap.docs.length == _pageSize;
+      _isOffline = false;
+      _cacheListings(_allListings);
+
+      _allSub?.cancel();
+      _allSub = _firestore
+          .collection('listings')
+          .where('isResolved', isEqualTo: false)
+          .orderBy('createdAt', descending: true)
+          .limit(_pageSize)
+          .snapshots()
+          .listen((snapshot) {
+        _allListings = snapshot.docs.map(ListingModel.fromFirestore).toList();
+        _isOffline = false;
+        notifyListeners();
+      }, onError: (e) => _handleStreamError(e));
+    } catch (e) {
+      _handleStreamError(e);
+    }
+  }
+
+  Future<void> loadMoreAll() async {
+    if (!_hasMoreAll || _isLoadingMoreAll || _lastAllDoc == null) return;
+    _isLoadingMoreAll = true;
+    notifyListeners();
+
+    try {
+      final snap = await _firestore
+          .collection('listings')
+          .where('isResolved', isEqualTo: false)
+          .orderBy('createdAt', descending: true)
+          .startAfterDocument(_lastAllDoc!)
+          .limit(_pageSize)
+          .get();
+
+      final newListings = snap.docs.map(ListingModel.fromFirestore).toList();
+      _allListings.addAll(newListings);
+      _lastAllDoc = snap.docs.isNotEmpty ? snap.docs.last : _lastAllDoc;
+      _hasMoreAll = snap.docs.length == _pageSize;
+    } catch (e) {
+      _errorMessage = 'Failed to load more listings.';
+    }
+
+    _isLoadingMoreAll = false;
+    notifyListeners();
+  }
+
+  // ── Lost listings ─────────────────────────────────────────────────────────────
   Future<void> _loadInitialLost() async {
     try {
       final snap = await _firestore
@@ -86,8 +154,6 @@ class ListingsProvider extends ChangeNotifier {
       _lostListings = snap.docs.map(ListingModel.fromFirestore).toList();
       _lastLostDoc = snap.docs.isNotEmpty ? snap.docs.last : null;
       _hasMoreLost = snap.docs.length == _pageSize;
-      _isOffline = false;
-      _cacheListings(_lostListings);
 
       _lostSub?.cancel();
       _lostSub = _firestore
@@ -99,41 +165,6 @@ class ListingsProvider extends ChangeNotifier {
           .snapshots()
           .listen((snapshot) {
         _lostListings = snapshot.docs.map(ListingModel.fromFirestore).toList();
-        _isOffline = false;
-        notifyListeners();
-      }, onError: (e) => _handleStreamError(e));
-    } catch (e) {
-      _handleStreamError(e);
-    }
-  }
-
-  Future<void> _loadInitialFound() async {
-    try {
-      final snap = await _firestore
-          .collection('listings')
-          .where('type', isEqualTo: 'found')
-          .where('isResolved', isEqualTo: false)
-          .orderBy('createdAt', descending: true)
-          .limit(_pageSize)
-          .get();
-
-      _foundListings = snap.docs.map(ListingModel.fromFirestore).toList();
-      _lastFoundDoc = snap.docs.isNotEmpty ? snap.docs.last : null;
-      _hasMoreFound = snap.docs.length == _pageSize;
-      _isOffline = false;
-      _cacheListings(_foundListings);
-
-      _foundSub?.cancel();
-      _foundSub = _firestore
-          .collection('listings')
-          .where('type', isEqualTo: 'found')
-          .where('isResolved', isEqualTo: false)
-          .orderBy('createdAt', descending: true)
-          .limit(_pageSize)
-          .snapshots()
-          .listen((snapshot) {
-        _foundListings = snapshot.docs.map(ListingModel.fromFirestore).toList();
-        _isOffline = false;
         notifyListeners();
       }, onError: (e) => _handleStreamError(e));
     } catch (e) {
@@ -156,8 +187,7 @@ class ListingsProvider extends ChangeNotifier {
           .limit(_pageSize)
           .get();
 
-      final newListings = snap.docs.map(ListingModel.fromFirestore).toList();
-      _lostListings.addAll(newListings);
+      _lostListings.addAll(snap.docs.map(ListingModel.fromFirestore));
       _lastLostDoc = snap.docs.isNotEmpty ? snap.docs.last : _lastLostDoc;
       _hasMoreLost = snap.docs.length == _pageSize;
     } catch (e) {
@@ -166,6 +196,38 @@ class ListingsProvider extends ChangeNotifier {
 
     _isLoadingMoreLost = false;
     notifyListeners();
+  }
+
+  // ── Found listings ────────────────────────────────────────────────────────────
+  Future<void> _loadInitialFound() async {
+    try {
+      final snap = await _firestore
+          .collection('listings')
+          .where('type', isEqualTo: 'found')
+          .where('isResolved', isEqualTo: false)
+          .orderBy('createdAt', descending: true)
+          .limit(_pageSize)
+          .get();
+
+      _foundListings = snap.docs.map(ListingModel.fromFirestore).toList();
+      _lastFoundDoc = snap.docs.isNotEmpty ? snap.docs.last : null;
+      _hasMoreFound = snap.docs.length == _pageSize;
+
+      _foundSub?.cancel();
+      _foundSub = _firestore
+          .collection('listings')
+          .where('type', isEqualTo: 'found')
+          .where('isResolved', isEqualTo: false)
+          .orderBy('createdAt', descending: true)
+          .limit(_pageSize)
+          .snapshots()
+          .listen((snapshot) {
+        _foundListings = snapshot.docs.map(ListingModel.fromFirestore).toList();
+        notifyListeners();
+      }, onError: (e) => _handleStreamError(e));
+    } catch (e) {
+      _handleStreamError(e);
+    }
   }
 
   Future<void> loadMoreFound() async {
@@ -183,8 +245,7 @@ class ListingsProvider extends ChangeNotifier {
           .limit(_pageSize)
           .get();
 
-      final newListings = snap.docs.map(ListingModel.fromFirestore).toList();
-      _foundListings.addAll(newListings);
+      _foundListings.addAll(snap.docs.map(ListingModel.fromFirestore));
       _lastFoundDoc = snap.docs.isNotEmpty ? snap.docs.last : _lastFoundDoc;
       _hasMoreFound = snap.docs.length == _pageSize;
     } catch (e) {
@@ -195,11 +256,8 @@ class ListingsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> loadMoreAll() async {
-    await Future.wait([loadMoreLost(), loadMoreFound()]);
-  }
-
   void stopListening() {
+    _allSub?.cancel();
     _lostSub?.cancel();
     _foundSub?.cancel();
   }
@@ -380,6 +438,7 @@ class ListingsProvider extends ChangeNotifier {
       final box = Hive.box<ListingModel>('recentListings');
       _cachedListings = box.values.toList()
         ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      _allListings = _cachedListings.where((l) => !l.isResolved).toList();
       _lostListings = _cachedListings.where((l) => l.type == 'lost').toList();
       _foundListings = _cachedListings.where((l) => l.type == 'found').toList();
       notifyListeners();
