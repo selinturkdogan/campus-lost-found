@@ -10,9 +10,19 @@ class ListingsProvider extends ChangeNotifier {
   final _firestore = FirebaseFirestore.instance;
   final _storage = FirebaseStorage.instance;
 
+  static const int _pageSize = 10;
+
   List<ListingModel> _lostListings = [];
   List<ListingModel> _foundListings = [];
   List<ListingModel> _cachedListings = [];
+
+  DocumentSnapshot? _lastLostDoc;
+  DocumentSnapshot? _lastFoundDoc;
+
+  bool _hasMoreLost = true;
+  bool _hasMoreFound = true;
+  bool _isLoadingMoreLost = false;
+  bool _isLoadingMoreFound = false;
 
   bool _isLoading = false;
   bool _isOffline = false;
@@ -26,10 +36,20 @@ class ListingsProvider extends ChangeNotifier {
 
   List<ListingModel> get lostListings => _filterListings(_lostListings);
   List<ListingModel> get foundListings => _filterListings(_foundListings);
-  List<ListingModel> get allListings => [..._lostListings, ..._foundListings];
+  List<ListingModel> get allListings {
+    final all = [..._lostListings, ..._foundListings];
+    all.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return _filterListings(all);
+  }
+
   List<ListingModel> get cachedListings => _cachedListings;
   bool get isLoading => _isLoading;
   bool get isOffline => _isOffline;
+  bool get isLoadingMoreLost => _isLoadingMoreLost;
+  bool get isLoadingMoreFound => _isLoadingMoreFound;
+  bool get hasMoreLost => _hasMoreLost;
+  bool get hasMoreFound => _hasMoreFound;
+  bool get hasMoreAll => _hasMoreLost || _hasMoreFound;
   String? get errorMessage => _errorMessage;
   String get searchQuery => _searchQuery;
   String? get selectedLocation => _selectedLocation;
@@ -47,36 +67,136 @@ class ListingsProvider extends ChangeNotifier {
 
   void startListening() {
     _setLoading(true);
+    Future.wait([
+      _loadInitialLost(),
+      _loadInitialFound(),
+    ]).then((_) => _setLoading(false));
+  }
 
-    _lostSub = _firestore
-        .collection('listings')
-        .where('type', isEqualTo: 'lost')
-        .where('isResolved', isEqualTo: false)
-        .snapshots()
-        .listen(
-      (snapshot) {
+  Future<void> _loadInitialLost() async {
+    try {
+      final snap = await _firestore
+          .collection('listings')
+          .where('type', isEqualTo: 'lost')
+          .where('isResolved', isEqualTo: false)
+          .orderBy('createdAt', descending: true)
+          .limit(_pageSize)
+          .get();
+
+      _lostListings = snap.docs.map(ListingModel.fromFirestore).toList();
+      _lastLostDoc = snap.docs.isNotEmpty ? snap.docs.last : null;
+      _hasMoreLost = snap.docs.length == _pageSize;
+      _isOffline = false;
+      _cacheListings(_lostListings);
+
+      _lostSub?.cancel();
+      _lostSub = _firestore
+          .collection('listings')
+          .where('type', isEqualTo: 'lost')
+          .where('isResolved', isEqualTo: false)
+          .orderBy('createdAt', descending: true)
+          .limit(_pageSize)
+          .snapshots()
+          .listen((snapshot) {
         _lostListings = snapshot.docs.map(ListingModel.fromFirestore).toList();
         _isOffline = false;
-        _cacheListings(_lostListings);
-        _setLoading(false);
-      },
-      onError: (e) => _handleStreamError(e),
-    );
+        notifyListeners();
+      }, onError: (e) => _handleStreamError(e));
+    } catch (e) {
+      _handleStreamError(e);
+    }
+  }
 
-    _foundSub = _firestore
-        .collection('listings')
-        .where('type', isEqualTo: 'found')
-        .where('isResolved', isEqualTo: false)
-        .snapshots()
-        .listen(
-      (snapshot) {
+  Future<void> _loadInitialFound() async {
+    try {
+      final snap = await _firestore
+          .collection('listings')
+          .where('type', isEqualTo: 'found')
+          .where('isResolved', isEqualTo: false)
+          .orderBy('createdAt', descending: true)
+          .limit(_pageSize)
+          .get();
+
+      _foundListings = snap.docs.map(ListingModel.fromFirestore).toList();
+      _lastFoundDoc = snap.docs.isNotEmpty ? snap.docs.last : null;
+      _hasMoreFound = snap.docs.length == _pageSize;
+      _isOffline = false;
+      _cacheListings(_foundListings);
+
+      _foundSub?.cancel();
+      _foundSub = _firestore
+          .collection('listings')
+          .where('type', isEqualTo: 'found')
+          .where('isResolved', isEqualTo: false)
+          .orderBy('createdAt', descending: true)
+          .limit(_pageSize)
+          .snapshots()
+          .listen((snapshot) {
         _foundListings = snapshot.docs.map(ListingModel.fromFirestore).toList();
         _isOffline = false;
-        _cacheListings(_foundListings);
-        _setLoading(false);
-      },
-      onError: (e) => _handleStreamError(e),
-    );
+        notifyListeners();
+      }, onError: (e) => _handleStreamError(e));
+    } catch (e) {
+      _handleStreamError(e);
+    }
+  }
+
+  Future<void> loadMoreLost() async {
+    if (!_hasMoreLost || _isLoadingMoreLost || _lastLostDoc == null) return;
+    _isLoadingMoreLost = true;
+    notifyListeners();
+
+    try {
+      final snap = await _firestore
+          .collection('listings')
+          .where('type', isEqualTo: 'lost')
+          .where('isResolved', isEqualTo: false)
+          .orderBy('createdAt', descending: true)
+          .startAfterDocument(_lastLostDoc!)
+          .limit(_pageSize)
+          .get();
+
+      final newListings = snap.docs.map(ListingModel.fromFirestore).toList();
+      _lostListings.addAll(newListings);
+      _lastLostDoc = snap.docs.isNotEmpty ? snap.docs.last : _lastLostDoc;
+      _hasMoreLost = snap.docs.length == _pageSize;
+    } catch (e) {
+      _errorMessage = 'Failed to load more listings.';
+    }
+
+    _isLoadingMoreLost = false;
+    notifyListeners();
+  }
+
+  Future<void> loadMoreFound() async {
+    if (!_hasMoreFound || _isLoadingMoreFound || _lastFoundDoc == null) return;
+    _isLoadingMoreFound = true;
+    notifyListeners();
+
+    try {
+      final snap = await _firestore
+          .collection('listings')
+          .where('type', isEqualTo: 'found')
+          .where('isResolved', isEqualTo: false)
+          .orderBy('createdAt', descending: true)
+          .startAfterDocument(_lastFoundDoc!)
+          .limit(_pageSize)
+          .get();
+
+      final newListings = snap.docs.map(ListingModel.fromFirestore).toList();
+      _foundListings.addAll(newListings);
+      _lastFoundDoc = snap.docs.isNotEmpty ? snap.docs.last : _lastFoundDoc;
+      _hasMoreFound = snap.docs.length == _pageSize;
+    } catch (e) {
+      _errorMessage = 'Failed to load more listings.';
+    }
+
+    _isLoadingMoreFound = false;
+    notifyListeners();
+  }
+
+  Future<void> loadMoreAll() async {
+    await Future.wait([loadMoreLost(), loadMoreFound()]);
   }
 
   void stopListening() {
@@ -113,6 +233,9 @@ class ListingsProvider extends ChangeNotifier {
         'ownerName': ownerName,
         'isResolved': false,
         'createdAt': FieldValue.serverTimestamp(),
+        'expiresAt': Timestamp.fromDate(
+          DateTime.now().add(const Duration(days: 60)),
+        ),
       });
       return true;
     } catch (e) {
@@ -183,6 +306,22 @@ class ListingsProvider extends ChangeNotifier {
     }
   }
 
+  Future<bool> extendListing(String listingId) async {
+    try {
+      await _firestore.collection('listings').doc(listingId).update({
+        'expiresAt': Timestamp.fromDate(
+          DateTime.now().add(const Duration(days: 60)),
+        ),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      return true;
+    } catch (e) {
+      _errorMessage = 'Failed to extend listing.';
+      notifyListeners();
+      return false;
+    }
+  }
+
   Stream<List<ListingModel>> myPostsStream(String uid) {
     return _firestore
         .collection('listings')
@@ -192,7 +331,6 @@ class ListingsProvider extends ChangeNotifier {
         .map((snap) => snap.docs.map(ListingModel.fromFirestore).toList());
   }
 
-  // ── Search & filter ──────────────────────────────────────────────────────────
   void setSearchQuery(String query) {
     _searchQuery = query.toLowerCase();
     notifyListeners();

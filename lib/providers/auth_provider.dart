@@ -1,10 +1,12 @@
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-
+import 'package:google_sign_in/google_sign_in.dart';
 class AuthProvider extends ChangeNotifier {
   final _auth = FirebaseAuth.instance;
   final _firestore = FirebaseFirestore.instance;
+  final _googleSignIn = GoogleSignIn(scopes: ['email']);
 
   User? _user;
   String? _displayName;
@@ -58,7 +60,39 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  Future<bool> signInWithGoogle() async {
+    _setLoading(true);
+    _clearError();
+    try {
+      final googleUser = await _googleSignIn.signIn();
+      if (googleUser == null) {
+        _setLoading(false);
+        return false;
+      }
+
+      final googleAuth = await googleUser.authentication;
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      final userCredential = await _auth.signInWithCredential(credential);
+      _user = userCredential.user;
+      if (_user != null) await _fetchDisplayName(_user!.uid);
+      return true;
+    } on FirebaseAuthException catch (e) {
+      _errorMessage = _parseAuthError(e.code);
+      return false;
+    } catch (e) {
+      _errorMessage = 'Google sign-in failed. Please try again.';
+      return false;
+    } finally {
+      _setLoading(false);
+    }
+  }
+
   Future<void> logout() async {
+    await _googleSignIn.signOut();
     await _auth.signOut();
     _user = null;
     _displayName = null;
@@ -73,7 +107,7 @@ class AuthProvider extends ChangeNotifier {
         _displayName = doc.data()?['displayName'] as String?;
         _isAdmin = doc.data()?['isAdmin'] == true;
       } else {
-        _displayName = _user?.email?.split('@').first;
+        _displayName = _user?.displayName ?? _user?.email?.split('@').first;
         _isAdmin = false;
         await _firestore.collection('users').doc(uid).set({
           'uid': uid,
@@ -84,7 +118,7 @@ class AuthProvider extends ChangeNotifier {
         }, SetOptions(merge: true));
       }
     } catch (_) {
-      _displayName = _user?.email?.split('@').first ?? 'Student';
+      _displayName = _user?.displayName ?? _user?.email?.split('@').first ?? 'Student';
       _isAdmin = false;
     }
   }

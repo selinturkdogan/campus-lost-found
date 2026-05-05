@@ -1,0 +1,90 @@
+{
+  "project_info": {
+    "project_number": "440674901854",
+    "project_id": "campus-lost-found-68e7d",
+    "storage_bucket": "campus-lost-found-68e7d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:440674901854:android:bac7d662b21ecc4cf2b9cf",
+        "android_client_info": {
+          "package_name": "com.example.campus_lf_new"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "440674901854-0p2q777n763qjstkhb01itcm0861isu8.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDFKUUPrrIsY1Ne6lGJ58ir7A4UXgBI4xI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "440674901854-0p2q777n763qjstkhb01itcm0861isu8.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "440674901854-n1m20jr4ug1307q236b7u4fraq36fu1t.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.campusLostFound"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:440674901854:android:d2686e26a535607bf2b9cf",
+        "android_client_info": {
+          "package_name": "com.example.campus_lost_found"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "440674901854-b4g6lnk5c5n57f0qr99btjsv3i7b2b66.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.campus_lost_found",
+            "certificate_hash": "fd53289f3c980c161347de33c240f5ac98ff4537"
+          }
+        },
+        {
+          "client_id": "440674901854-0p2q777n763qjstkhb01itcm0861isu8.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDFKUUPrrIsY1Ne6lGJ58ir7A4UXgBI4xI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "440674901854-0p2q777n763qjstkhb01itcm0861isu8.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "440674901854-n1m20jr4ug1307q236b7u4fraq36fu1t.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.campusLostFound"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

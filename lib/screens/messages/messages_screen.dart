@@ -37,7 +37,6 @@ class MessagesScreen extends StatelessWidget {
                 ],
               ),
             ),
-
             Expanded(
               child: _AllChatsView(uid: auth.user!.uid),
             ),
@@ -54,21 +53,13 @@ class _AllChatsView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-
-    // Get all listings owned by the user or where user is a participant
     return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('listings')
-          .snapshots(),
+      stream: FirebaseFirestore.instance.collection('listings').snapshots(),
       builder: (context, listingSnap) {
         if (!listingSnap.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
-
         final listings = listingSnap.data!.docs;
-
         return ListView.builder(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
           itemCount: listings.length,
@@ -76,7 +67,6 @@ class _AllChatsView extends StatelessWidget {
             final listingData = listings[i].data() as Map<String, dynamic>;
             final listingId = listings[i].id;
             final listingTitle = listingData['title'] ?? '';
-
             return _ListingChatsCard(
               uid: uid,
               listingId: listingId,
@@ -103,6 +93,62 @@ class _ListingChatsCard extends StatelessWidget {
     required this.listingData,
   });
 
+  Future<void> _deleteChat(BuildContext context, String chatId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Delete conversation?'),
+        content: const Text('This will delete the conversation for you. This action cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      // Delete all messages in the chat
+      final messages = await FirebaseFirestore.instance
+          .collection('listings')
+          .doc(listingId)
+          .collection('chats')
+          .doc(chatId)
+          .collection('messages')
+          .get();
+
+      final batch = FirebaseFirestore.instance.batch();
+      for (final doc in messages.docs) {
+        batch.delete(doc.reference);
+      }
+      // Delete the chat document itself
+      batch.delete(
+        FirebaseFirestore.instance
+            .collection('listings')
+            .doc(listingId)
+            .collection('chats')
+            .doc(chatId),
+      );
+      await batch.commit();
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to delete conversation.')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -118,7 +164,6 @@ class _ListingChatsCard extends StatelessWidget {
       builder: (context, chatSnap) {
         if (!chatSnap.hasData) return const SizedBox.shrink();
 
-        // Filter chats where current user is a participant
         final chats = chatSnap.data!.docs.where((doc) {
           final data = doc.data() as Map<String, dynamic>;
           final participants = List<String>.from(data['participants'] ?? []);
@@ -163,7 +208,7 @@ class _ListingChatsCard extends StatelessWidget {
               ),
             ),
 
-            // Chat items
+            // Chat items with swipe to delete
             ...chats.map((chat) {
               final data = chat.data() as Map<String, dynamic>;
               final participantNames = Map<String, dynamic>.from(data['participantNames'] ?? {});
@@ -173,76 +218,150 @@ class _ListingChatsCard extends StatelessWidget {
               final otherUserName = participantNames[otherUserId]?.toString() ?? 'Unknown';
               final lastMessage = data['lastMessage']?.toString() ?? '';
               final lastMessageAt = (data['lastMessageAt'] as Timestamp?)?.toDate();
+              final chatId = chat.id;
 
-              return GestureDetector(
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ChatScreen(
-                      listingId: listingId,
-                      listingTitle: listingTitle,
-                      otherUserId: otherUserId,
-                      otherUserName: otherUserName,
+              return Dismissible(
+                key: Key(chatId),
+                direction: DismissDirection.endToStart,
+                confirmDismiss: (_) async {
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      backgroundColor: scheme.surface,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      title: const Text('Delete conversation?'),
+                      content: const Text('This action cannot be undone.'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text('Cancel'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          style: TextButton.styleFrom(foregroundColor: Colors.red),
+                          child: const Text('Delete'),
+                        ),
+                      ],
                     ),
+                  );
+                  return confirmed ?? false;
+                },
+                onDismissed: (_) async {
+                  try {
+                    final messages = await FirebaseFirestore.instance
+                        .collection('listings')
+                        .doc(listingId)
+                        .collection('chats')
+                        .doc(chatId)
+                        .collection('messages')
+                        .get();
+                    final batch = FirebaseFirestore.instance.batch();
+                    for (final doc in messages.docs) {
+                      batch.delete(doc.reference);
+                    }
+                    batch.delete(
+                      FirebaseFirestore.instance
+                          .collection('listings')
+                          .doc(listingId)
+                          .collection('chats')
+                          .doc(chatId),
+                    );
+                    await batch.commit();
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Failed to delete conversation.')),
+                      );
+                    }
+                  }
+                },
+                background: Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.red,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  alignment: Alignment.centerRight,
+                  padding: const EdgeInsets.only(right: 20),
+                  child: const Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.delete_outline_rounded, color: Colors.white, size: 24),
+                      SizedBox(height: 4),
+                      Text('Delete', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                    ],
                   ),
                 ),
-                child: Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: scheme.surface,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: scheme.outline.withOpacity(0.5)),
+                child: GestureDetector(
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ChatScreen(
+                        listingId: listingId,
+                        listingTitle: listingTitle,
+                        otherUserId: otherUserId,
+                        otherUserName: otherUserName,
+                      ),
+                    ),
                   ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 42, height: 42,
-                        decoration: BoxDecoration(
-                          color: scheme.primary.withOpacity(0.15),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Center(
-                          child: Text(
-                            otherUserName.isNotEmpty ? otherUserName[0].toUpperCase() : '?',
-                            style: TextStyle(
-                              color: scheme.primary,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 16,
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: scheme.surface,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: scheme.outline.withOpacity(0.5)),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 42, height: 42,
+                          decoration: BoxDecoration(
+                            color: scheme.primary.withOpacity(0.15),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: Text(
+                              otherUserName.isNotEmpty ? otherUserName[0].toUpperCase() : '?',
+                              style: TextStyle(
+                                color: scheme.primary,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 16,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(otherUserName, style: textTheme.titleSmall),
+                              const SizedBox(height: 2),
+                              Text(
+                                lastMessage.isEmpty ? 'No messages yet' : lastMessage,
+                                style: textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            Text(otherUserName, style: textTheme.titleSmall),
-                            const SizedBox(height: 2),
-                            Text(
-                              lastMessage.isEmpty ? 'No messages yet' : lastMessage,
-                              style: textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                            if (lastMessageAt != null)
+                              Text(
+                                DateFormat('h:mm a').format(lastMessageAt),
+                                style: textTheme.bodySmall,
+                              ),
+                            const SizedBox(height: 4),
+                            Icon(Icons.arrow_forward_ios_rounded, size: 12, color: scheme.onSurfaceVariant),
                           ],
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          if (lastMessageAt != null)
-                            Text(
-                              DateFormat('h:mm a').format(lastMessageAt),
-                              style: textTheme.bodySmall,
-                            ),
-                          const SizedBox(height: 4),
-                          Icon(Icons.arrow_forward_ios_rounded, size: 12, color: scheme.onSurfaceVariant),
-                        ],
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               );

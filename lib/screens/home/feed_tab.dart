@@ -14,24 +14,16 @@ class FeedTab extends StatefulWidget {
 
 class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
   late final TabController _tabCtrl;
-  final _searchCtrl = TextEditingController();
-  String _activeTab = 'all';
 
   @override
   void initState() {
     super.initState();
     _tabCtrl = TabController(length: 3, vsync: this);
-    _tabCtrl.addListener(() {
-      if (!_tabCtrl.indexIsChanging) {
-        setState(() => _activeTab = ['all', 'lost', 'found'][_tabCtrl.index]);
-      }
-    });
   }
 
   @override
   void dispose() {
     _tabCtrl.dispose();
-    _searchCtrl.dispose();
     super.dispose();
   }
 
@@ -99,7 +91,7 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
             ),
           ),
 
-          // Active filter chips row
+          // Active filter chips
           Consumer<ListingsProvider>(
             builder: (_, provider, __) {
               final hasFilters = provider.selectedLocation != null || provider.selectedCategory != null;
@@ -152,11 +144,11 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
                 width: double.infinity,
                 color: Colors.orange.withOpacity(0.1),
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(
+                child: const Row(
                   children: [
-                    const Icon(Icons.wifi_off_rounded, size: 14, color: Colors.orange),
-                    const SizedBox(width: 8),
-                    const Text('Offline — showing cached listings',
+                    Icon(Icons.wifi_off_rounded, size: 14, color: Colors.orange),
+                    SizedBox(width: 8),
+                    Text('Offline — showing cached listings',
                         style: TextStyle(fontSize: 12, color: Colors.orange)),
                   ],
                 ),
@@ -165,30 +157,22 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
           ),
 
           Expanded(
-            child: Consumer<ListingsProvider>(
-              builder: (_, provider, __) {
-                return TabBarView(
-                  controller: _tabCtrl,
-                  children: [
-                    _ListingsList(
-                      listings: [...provider.lostListings, ...provider.foundListings]
-                        ..sort((a, b) => b.createdAt.compareTo(a.createdAt)),
-                      isLoading: provider.isLoading,
-                      emptyMessage: 'No items posted yet.',
-                    ),
-                    _ListingsList(
-                      listings: provider.lostListings,
-                      isLoading: provider.isLoading,
-                      emptyMessage: 'No lost items reported.',
-                    ),
-                    _ListingsList(
-                      listings: provider.foundListings,
-                      isLoading: provider.isLoading,
-                      emptyMessage: 'No found items reported.',
-                    ),
-                  ],
-                );
-              },
+            child: TabBarView(
+              controller: _tabCtrl,
+              children: [
+                _PaginatedList(
+                  type: 'all',
+                  emptyMessage: 'No items posted yet.',
+                ),
+                _PaginatedList(
+                  type: 'lost',
+                  emptyMessage: 'No lost items reported.',
+                ),
+                _PaginatedList(
+                  type: 'found',
+                  emptyMessage: 'No found items reported.',
+                ),
+              ],
             ),
           ),
         ],
@@ -207,43 +191,114 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
   }
 }
 
-class _ListingsList extends StatelessWidget {
-  final List<ListingModel> listings;
-  final bool isLoading;
+// ── Paginated List ────────────────────────────────────────────────────────────
+
+class _PaginatedList extends StatefulWidget {
+  final String type; // 'all', 'lost', 'found'
   final String emptyMessage;
 
-  const _ListingsList({required this.listings, required this.isLoading, required this.emptyMessage});
+  const _PaginatedList({required this.type, required this.emptyMessage});
+
+  @override
+  State<_PaginatedList> createState() => _PaginatedListState();
+}
+
+class _PaginatedListState extends State<_PaginatedList> {
+  final _scrollCtrl = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollCtrl.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (_scrollCtrl.position.pixels >= _scrollCtrl.position.maxScrollExtent - 200) {
+      final provider = context.read<ListingsProvider>();
+      if (widget.type == 'lost') {
+        provider.loadMoreLost();
+      } else if (widget.type == 'found') {
+        provider.loadMoreFound();
+      } else {
+        provider.loadMoreAll();
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (isLoading) {
-      return Shimmer.fromColors(
-        baseColor: Theme.of(context).colorScheme.surfaceVariant,
-        highlightColor: Theme.of(context).colorScheme.surface,
-        child: ListView.separated(
+    return Consumer<ListingsProvider>(
+      builder: (_, provider, __) {
+        if (provider.isLoading) {
+          return Shimmer.fromColors(
+            baseColor: Theme.of(context).colorScheme.surfaceVariant,
+            highlightColor: Theme.of(context).colorScheme.surface,
+            child: ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
+              itemCount: 5,
+              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              itemBuilder: (_, __) => Container(
+                height: 80,
+                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          );
+        }
+
+        List<ListingModel> listings;
+        bool isLoadingMore;
+        bool hasMore;
+
+        if (widget.type == 'lost') {
+          listings = provider.lostListings;
+          isLoadingMore = provider.isLoadingMoreLost;
+          hasMore = provider.hasMoreLost;
+        } else if (widget.type == 'found') {
+          listings = provider.foundListings;
+          isLoadingMore = provider.isLoadingMoreFound;
+          hasMore = provider.hasMoreFound;
+        } else {
+          listings = provider.allListings;
+          isLoadingMore = provider.isLoadingMoreLost || provider.isLoadingMoreFound;
+          hasMore = provider.hasMoreAll;
+        }
+
+        if (listings.isEmpty) {
+          return Center(child: Text(widget.emptyMessage, style: Theme.of(context).textTheme.bodySmall));
+        }
+
+        return ListView.separated(
+          controller: _scrollCtrl,
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
-          itemCount: 5,
+          itemCount: listings.length + (isLoadingMore || hasMore ? 1 : 0),
           separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (_, __) => Container(
-            height: 80,
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
-          ),
-        ),
-      );
-    }
-
-    if (listings.isEmpty) {
-      return Center(child: Text(emptyMessage, style: Theme.of(context).textTheme.bodySmall));
-    }
-
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
-      itemCount: listings.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (_, i) => ListingCard(listing: listings[i]),
+          itemBuilder: (_, i) {
+            if (i == listings.length) {
+              if (isLoadingMore) {
+                return const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: CircularProgressIndicator(),
+                  ),
+                );
+              }
+              return const SizedBox.shrink();
+            }
+            return ListingCard(listing: listings[i]);
+          },
+        );
+      },
     );
   }
 }
+
+// ── Filter Sheet ──────────────────────────────────────────────────────────────
 
 class _FilterSheet extends StatelessWidget {
   @override
@@ -281,8 +336,6 @@ class _FilterSheet extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 20),
-
-            // Location
             Text('Location', style: textTheme.titleSmall),
             const SizedBox(height: 10),
             Wrap(
@@ -297,8 +350,6 @@ class _FilterSheet extends StatelessWidget {
               }).toList(),
             ),
             const SizedBox(height: 24),
-
-            // Category
             Text('Category', style: textTheme.titleSmall),
             const SizedBox(height: 10),
             Wrap(
@@ -313,7 +364,6 @@ class _FilterSheet extends StatelessWidget {
               }).toList(),
             ),
             const SizedBox(height: 24),
-
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
@@ -327,6 +377,8 @@ class _FilterSheet extends StatelessWidget {
     );
   }
 }
+
+// ── Search Delegate ───────────────────────────────────────────────────────────
 
 class _ListingSearchDelegate extends SearchDelegate {
   final ListingsProvider provider;
@@ -351,8 +403,7 @@ class _ListingSearchDelegate extends SearchDelegate {
 
   Widget _buildList(BuildContext context) {
     provider.setSearchQuery(query);
-    final all = [...provider.lostListings, ...provider.foundListings]
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final all = provider.allListings;
     if (all.isEmpty) {
       return Center(child: Text('No results for "$query"', style: Theme.of(context).textTheme.bodySmall));
     }

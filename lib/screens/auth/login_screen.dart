@@ -30,21 +30,20 @@ class _LoginScreenState extends State<LoginScreen>
       duration: const Duration(milliseconds: 900),
     );
 
-    // Staggered entry for 4 items: logo, title, form, button
-    _slideAnims = List.generate(4, (i) {
+    _slideAnims = List.generate(5, (i) {
       return Tween<Offset>(
         begin: const Offset(0, 0.3),
         end: Offset.zero,
       ).animate(CurvedAnimation(
         parent: _entryCtrl,
-        curve: Interval(i * 0.12, 0.6 + i * 0.12, curve: Curves.easeOutCubic),
+        curve: Interval(i * 0.1, 0.6 + i * 0.1, curve: Curves.easeOutCubic),
       ));
     });
 
-    _fadeAnims = List.generate(4, (i) {
+    _fadeAnims = List.generate(5, (i) {
       return Tween<double>(begin: 0, end: 1).animate(CurvedAnimation(
         parent: _entryCtrl,
-        curve: Interval(i * 0.12, 0.6 + i * 0.12, curve: Curves.easeOut),
+        curve: Interval(i * 0.1, 0.6 + i * 0.1, curve: Curves.easeOut),
       ));
     });
 
@@ -71,6 +70,17 @@ class _LoginScreenState extends State<LoginScreen>
       Navigator.pushReplacementNamed(context, AppRoutes.feed);
     } else {
       _showError(auth.errorMessage ?? 'Login failed');
+    }
+  }
+
+  Future<void> _loginWithGoogle() async {
+    final auth = context.read<AuthProvider>();
+    final success = await auth.signInWithGoogle();
+    if (!mounted) return;
+    if (success) {
+      Navigator.pushReplacementNamed(context, AppRoutes.feed);
+    } else if (auth.errorMessage != null) {
+      _showError(auth.errorMessage!);
     }
   }
 
@@ -121,7 +131,6 @@ class _LoginScreenState extends State<LoginScreen>
                 children: [
                   const SizedBox(height: 56),
 
-                  // ── Logo ───────────────────────────────────────────────────
                   _animated(
                     0,
                     Container(
@@ -131,17 +140,12 @@ class _LoginScreenState extends State<LoginScreen>
                         gradient: AppTheme.primaryGradient,
                         borderRadius: BorderRadius.circular(16),
                       ),
-                      child: const Icon(
-                        Icons.search_rounded,
-                        color: Colors.white,
-                        size: 30,
-                      ),
+                      child: const Icon(Icons.search_rounded, color: Colors.white, size: 30),
                     ),
                   ),
 
                   const SizedBox(height: 28),
 
-                  // ── Title block ────────────────────────────────────────────
                   _animated(
                     1,
                     Column(
@@ -150,10 +154,8 @@ class _LoginScreenState extends State<LoginScreen>
                         Text('Welcome back', style: textTheme.displayMedium),
                         const SizedBox(height: 8),
                         Text(
-                          'Use your university email and password to continue.',
-                          style: textTheme.bodyMedium?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
+                          'Sign in with your university account to continue.',
+                          style: textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
                         ),
                       ],
                     ),
@@ -161,12 +163,10 @@ class _LoginScreenState extends State<LoginScreen>
 
                   const SizedBox(height: 40),
 
-                  // ── Form fields ────────────────────────────────────────────
                   _animated(
                     2,
                     Column(
                       children: [
-                        // Email
                         _buildLabel('Email address'),
                         const SizedBox(height: 8),
                         TextFormField(
@@ -176,11 +176,7 @@ class _LoginScreenState extends State<LoginScreen>
                           style: textTheme.bodyLarge,
                           decoration: InputDecoration(
                             hintText: 'you@university.edu',
-                            prefixIcon: Icon(
-                              Icons.email_outlined,
-                              size: 20,
-                              color: scheme.onSurfaceVariant,
-                            ),
+                            prefixIcon: Icon(Icons.email_outlined, size: 20, color: scheme.onSurfaceVariant),
                           ),
                           validator: (val) {
                             if (val == null || val.isEmpty) return 'Email is required';
@@ -188,10 +184,7 @@ class _LoginScreenState extends State<LoginScreen>
                             return null;
                           },
                         ),
-
                         const SizedBox(height: 20),
-
-                        // Password
                         _buildLabel('Password'),
                         const SizedBox(height: 8),
                         TextFormField(
@@ -202,22 +195,14 @@ class _LoginScreenState extends State<LoginScreen>
                           style: textTheme.bodyLarge,
                           decoration: InputDecoration(
                             hintText: '••••••••',
-                            prefixIcon: Icon(
-                              Icons.lock_outline_rounded,
-                              size: 20,
-                              color: scheme.onSurfaceVariant,
-                            ),
+                            prefixIcon: Icon(Icons.lock_outline_rounded, size: 20, color: scheme.onSurfaceVariant),
                             suffixIcon: IconButton(
                               icon: Icon(
-                                _obscurePassword
-                                    ? Icons.visibility_outlined
-                                    : Icons.visibility_off_outlined,
+                                _obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
                                 size: 20,
                                 color: scheme.onSurfaceVariant,
                               ),
-                              onPressed: () => setState(
-                                () => _obscurePassword = !_obscurePassword,
-                              ),
+                              onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
                             ),
                           ),
                           validator: (val) {
@@ -232,22 +217,69 @@ class _LoginScreenState extends State<LoginScreen>
 
                   const SizedBox(height: 32),
 
-                  // ── Login button ───────────────────────────────────────────
                   _animated(
                     3,
+                    Consumer<AuthProvider>(
+                      builder: (_, auth, __) => _GradientButton(
+                        label: 'Sign in',
+                        isLoading: auth.isLoading,
+                        onTap: _login,
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // OR divider
+                  _animated(
+                    4,
                     Column(
                       children: [
+                        Row(
+                          children: [
+                            Expanded(child: Divider(color: scheme.outline)),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              child: Text('or', style: textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+                            ),
+                            Expanded(child: Divider(color: scheme.outline)),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Google Sign-In button
                         Consumer<AuthProvider>(
-                          builder: (_, auth, __) => _GradientButton(
-                            label: 'Sign in',
-                            isLoading: auth.isLoading,
-                            onTap: _login,
+                          builder: (_, auth, __) => GestureDetector(
+                            onTap: auth.isLoading ? null : _loginWithGoogle,
+                            child: Container(
+                              width: double.infinity,
+                              height: 52,
+                              decoration: BoxDecoration(
+                                color: scheme.surface,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: scheme.outline),
+                              ),
+                              child: auth.isLoading
+                                  ? const Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)))
+                                  : Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Image.asset('assets/images/google_logo.png', width: 22, height: 22,
+                                          errorBuilder: (_, __, ___) => const Icon(Icons.g_mobiledata_rounded, size: 24),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Text(
+                                          'Continue with Google',
+                                          style: textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
+                                        ),
+                                      ],
+                                    ),
+                            ),
                           ),
                         ),
 
                         const SizedBox(height: 24),
 
-                        // Info note
                         Container(
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
@@ -257,22 +289,17 @@ class _LoginScreenState extends State<LoginScreen>
                           ),
                           child: Row(
                             children: [
-                              Icon(
-                                Icons.info_outline_rounded,
-                                size: 16,
-                                color: scheme.onSurfaceVariant,
-                              ),
+                              Icon(Icons.info_outline_rounded, size: 16, color: scheme.onSurfaceVariant),
                               const SizedBox(width: 10),
                               Expanded(
                                 child: Text(
-                                  'Access is managed by your campus administrator.',
+                                  'Sign in with your university Google account.',
                                   style: textTheme.bodySmall,
                                 ),
                               ),
                             ],
                           ),
                         ),
-
                         const SizedBox(height: 40),
                       ],
                     ),
@@ -299,17 +326,12 @@ class _LoginScreenState extends State<LoginScreen>
   }
 }
 
-// ── Gradient button widget ───────────────────────────────────────────────────
 class _GradientButton extends StatefulWidget {
   final String label;
   final bool isLoading;
   final VoidCallback onTap;
 
-  const _GradientButton({
-    required this.label,
-    required this.isLoading,
-    required this.onTap,
-  });
+  const _GradientButton({required this.label, required this.isLoading, required this.onTap});
 
   @override
   State<_GradientButton> createState() => _GradientButtonState();
@@ -365,25 +387,11 @@ class _GradientButtonState extends State<_GradientButton>
             ],
           ),
           child: widget.isLoading
-              ? const Center(
-                  child: SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2,
-                    ),
-                  ),
-                )
+              ? const Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)))
               : Center(
                   child: Text(
                     widget.label,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.2,
-                    ),
+                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600, letterSpacing: 0.2),
                   ),
                 ),
         ),

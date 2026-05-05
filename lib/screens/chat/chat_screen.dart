@@ -1,7 +1,13 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/notification_service.dart';
 
@@ -28,35 +34,65 @@ class _ChatScreenState extends State<ChatScreen> {
   final _scrollCtrl = ScrollController();
   bool _sending = false;
 
+  // Preview state
+  File? _pendingImage;
+  double? _pendingLat;
+  double? _pendingLng;
+
   String _getChatId(String uid1, String uid2) {
     final sorted = [uid1, uid2]..sort();
     return '${sorted[0]}_${sorted[1]}';
   }
 
-  Future<void> _sendMessage() async {
-    final text = _messageCtrl.text.trim();
-    if (text.isEmpty) return;
+  Future<void> _sendMessage({
+    String? text,
+    String? imageUrl,
+    double? lat,
+    double? lng,
+  }) async {
     final auth = context.read<AuthProvider>();
     final chatId = _getChatId(auth.user!.uid, widget.otherUserId);
+    final msgText = text ?? _messageCtrl.text.trim();
+
+    if (msgText.isEmpty && imageUrl == null && lat == null) return;
 
     setState(() => _sending = true);
-    _messageCtrl.clear();
+    if (text == null) _messageCtrl.clear();
 
     try {
+      final Map<String, dynamic> msgData = {
+        'senderId': auth.user!.uid,
+        'senderName': auth.displayName,
+        'createdAt': FieldValue.serverTimestamp(),
+      };
+
+      if (imageUrl != null) {
+        msgData['imageUrl'] = imageUrl;
+        msgData['type'] = 'image';
+      } else if (lat != null && lng != null) {
+        msgData['lat'] = lat;
+        msgData['lng'] = lng;
+        msgData['type'] = 'location';
+        msgData['text'] = 'Shared a location';
+      } else {
+        msgData['text'] = msgText;
+        msgData['type'] = 'text';
+      }
+
       await FirebaseFirestore.instance
           .collection('listings')
           .doc(widget.listingId)
           .collection('chats')
           .doc(chatId)
           .collection('messages')
-          .add({
-        'text': text,
-        'senderId': auth.user!.uid,
-        'senderName': auth.displayName,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+          .add(msgData);
 
-      // Update chat metadata
+      final lastMsg = imageUrl != null
+          ? '📷 Photo'
+          : lat != null
+              ? '📍 Location'
+              : msgText;
+
       await FirebaseFirestore.instance
           .collection('listings')
           .doc(widget.listingId)
@@ -68,7 +104,7 @@ class _ChatScreenState extends State<ChatScreen> {
           auth.user!.uid: auth.displayName,
           widget.otherUserId: widget.otherUserName,
         },
-        'lastMessage': text,
+        'lastMessage': lastMsg,
         'lastMessageAt': FieldValue.serverTimestamp(),
         'listingTitle': widget.listingTitle,
       }, SetOptions(merge: true));
@@ -79,7 +115,6 @@ class _ChatScreenState extends State<ChatScreen> {
         listingTitle: widget.listingTitle,
       );
 
-      // Scroll to bottom
       Future.delayed(const Duration(milliseconds: 100), () {
         if (_scrollCtrl.hasClients) {
           _scrollCtrl.animateTo(
@@ -96,7 +131,151 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }
     }
-    setState(() => _sending = false);
+    if (mounted) setState(() => _sending = false);
+  }
+
+  Future<void> _pickImage(ImageSource source) async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: source, imageQuality: 70);
+    if (picked == null) return;
+    setState(() {
+      _pendingImage = File(picked.path);
+      _pendingLat = null;
+      _pendingLng = null;
+    });
+  }
+
+  Future<void> _confirmSendImage() async {
+    if (_pendingImage == null) return;
+    setState(() => _sending = true);
+    try {
+      final auth = context.read<AuthProvider>();
+      final ref = FirebaseStorage.instance
+          .ref('chat_images/${auth.user!.uid}/${DateTime.now().millisecondsSinceEpoch}.jpg');
+      await ref.putFile(_pendingImage!);
+      final url = await ref.getDownloadURL();
+      setState(() => _pendingImage = null);
+      await _sendMessage(imageUrl: url);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to send image.')),
+        );
+      }
+    }
+    if (mounted) setState(() => _sending = false);
+  }
+
+  Future<void> _getLocation() async {
+    try {
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Location permission denied.')),
+            );
+          }
+          return;
+        }
+      }
+      if (permission == LocationPermission.deniedForever) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Enable location permission from settings.')),
+          );
+        }
+        return;
+      }
+
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      setState(() {
+        _pendingLat = pos.latitude;
+        _pendingLng = pos.longitude;
+        _pendingImage = null;
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to get location.')),
+        );
+      }
+    }
+  }
+
+  void _cancelPending() {
+    setState(() {
+      _pendingImage = null;
+      _pendingLat = null;
+      _pendingLng = null;
+    });
+  }
+
+  void _showAttachmentOptions() {
+    final scheme = Theme.of(context).colorScheme;
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: Container(
+                  width: 40, height: 40,
+                  decoration: BoxDecoration(
+                    color: scheme.primary.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(Icons.camera_alt_rounded, color: scheme.primary, size: 20),
+                ),
+                title: const Text('Take a photo'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _pickImage(ImageSource.camera);
+                },
+              ),
+              ListTile(
+                leading: Container(
+                  width: 40, height: 40,
+                  decoration: BoxDecoration(
+                    color: scheme.primary.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(Icons.photo_library_rounded, color: scheme.primary, size: 20),
+                ),
+                title: const Text('Choose from gallery'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _pickImage(ImageSource.gallery);
+                },
+              ),
+              ListTile(
+                leading: Container(
+                  width: 40, height: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.location_on_rounded, color: Colors.green, size: 20),
+                ),
+                title: const Text('Share location'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _getLocation();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -216,9 +395,14 @@ class _ChatScreenState extends State<ChatScreen> {
                       final data = messages[i].data() as Map<String, dynamic>;
                       final isMe = data['senderId'] == auth.user!.uid;
                       final createdAt = (data['createdAt'] as Timestamp?)?.toDate();
+                      final type = data['type'] ?? 'text';
 
                       return _MessageBubble(
+                        type: type,
                         text: data['text'] ?? '',
+                        imageUrl: data['imageUrl'],
+                        lat: data['lat']?.toDouble(),
+                        lng: data['lng']?.toDouble(),
                         isMe: isMe,
                         senderName: data['senderName'] ?? '',
                         time: createdAt,
@@ -232,15 +416,104 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
 
-            // Input
+            // Pending preview
+            if (_pendingImage != null)
+              Container(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                color: scheme.surfaceVariant,
+                child: Row(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.file(_pendingImage!, width: 60, height: 60, fit: BoxFit.cover),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text('Send this photo?', style: textTheme.bodyMedium),
+                    ),
+                    IconButton(
+                      onPressed: _cancelPending,
+                      icon: const Icon(Icons.close_rounded, color: Colors.red),
+                    ),
+                    IconButton(
+                      onPressed: _sending ? null : _confirmSendImage,
+                      icon: _sending
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.check_rounded, color: Colors.green),
+                    ),
+                  ],
+                ),
+              ),
+
+            if (_pendingLat != null && _pendingLng != null)
+              Container(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                color: scheme.surfaceVariant,
+                child: Row(
+                  children: [
+                    Container(
+                      width: 44, height: 44,
+                      decoration: BoxDecoration(
+                        color: Colors.green.withOpacity(0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.location_on_rounded, color: Colors.green, size: 22),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Share your location?', style: textTheme.bodyMedium),
+                          Text(
+                            '${_pendingLat!.toStringAsFixed(5)}, ${_pendingLng!.toStringAsFixed(5)}',
+                            style: textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: _cancelPending,
+                      icon: const Icon(Icons.close_rounded, color: Colors.red),
+                    ),
+                    IconButton(
+                      onPressed: _sending
+                          ? null
+                          : () async {
+                              final lat = _pendingLat!;
+                              final lng = _pendingLng!;
+                              setState(() { _pendingLat = null; _pendingLng = null; });
+                              await _sendMessage(lat: lat, lng: lng);
+                            },
+                      icon: _sending
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.check_rounded, color: Colors.green),
+                    ),
+                  ],
+                ),
+              ),
+
+            // Input bar
             Container(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
               decoration: BoxDecoration(
                 color: scheme.surface,
                 border: Border(top: BorderSide(color: scheme.outline, width: 1)),
               ),
               child: Row(
                 children: [
+                  GestureDetector(
+                    onTap: _sending ? null : _showAttachmentOptions,
+                    child: Container(
+                      width: 40, height: 40,
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceVariant,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(Icons.add_rounded, color: scheme.onSurfaceVariant, size: 22),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: TextField(
                       controller: _messageCtrl,
@@ -268,7 +541,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   const SizedBox(width: 8),
                   GestureDetector(
-                    onTap: _sending ? null : _sendMessage,
+                    onTap: _sending ? null : () => _sendMessage(text: _messageCtrl.text.trim()),
                     child: Container(
                       width: 44, height: 44,
                       decoration: BoxDecoration(
@@ -294,7 +567,11 @@ class _ChatScreenState extends State<ChatScreen> {
 }
 
 class _MessageBubble extends StatelessWidget {
+  final String type;
   final String text;
+  final String? imageUrl;
+  final double? lat;
+  final double? lng;
   final bool isMe;
   final String senderName;
   final DateTime? time;
@@ -303,7 +580,11 @@ class _MessageBubble extends StatelessWidget {
   final bool isDark;
 
   const _MessageBubble({
+    required this.type,
     required this.text,
+    this.imageUrl,
+    this.lat,
+    this.lng,
     required this.isMe,
     required this.senderName,
     required this.time,
@@ -311,6 +592,14 @@ class _MessageBubble extends StatelessWidget {
     required this.textTheme,
     required this.isDark,
   });
+
+  Future<void> _openLocation() async {
+    if (lat == null || lng == null) return;
+    final url = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lng');
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -329,7 +618,7 @@ class _MessageBubble extends StatelessWidget {
               ),
               child: Center(
                 child: Text(
-                  senderName[0].toUpperCase(),
+                  senderName.isNotEmpty ? senderName[0].toUpperCase() : '?',
                   style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 11),
                 ),
               ),
@@ -338,7 +627,7 @@ class _MessageBubble extends StatelessWidget {
           ],
           Flexible(
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.7),
               decoration: BoxDecoration(
                 color: isMe
                     ? scheme.primary
@@ -350,29 +639,108 @@ class _MessageBubble extends StatelessWidget {
                   bottomRight: Radius.circular(isMe ? 4 : 16),
                 ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    text,
-                    style: TextStyle(
-                      color: isMe ? Colors.white : scheme.onSurface,
-                      fontSize: 14,
-                      height: 1.4,
-                    ),
-                  ),
-                  if (time != null) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      DateFormat('h:mm a').format(time!),
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: isMe ? Colors.white.withOpacity(0.7) : scheme.onSurfaceVariant,
+              child: type == 'image' && imageUrl != null
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.only(
+                        topLeft: const Radius.circular(16),
+                        topRight: const Radius.circular(16),
+                        bottomLeft: Radius.circular(isMe ? 16 : 4),
+                        bottomRight: Radius.circular(isMe ? 4 : 16),
                       ),
-                    ),
-                  ],
-                ],
-              ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          CachedNetworkImage(
+                            imageUrl: imageUrl!,
+                            width: 220,
+                            fit: BoxFit.cover,
+                          ),
+                          if (time != null)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
+                              child: Text(
+                                DateFormat('h:mm a').format(time!),
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: isMe ? Colors.white.withOpacity(0.7) : scheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    )
+                  : type == 'location' && lat != null && lng != null
+                      ? GestureDetector(
+                          onTap: _openLocation,
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.location_on_rounded,
+                                  color: isMe ? Colors.white : Colors.green,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 8),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Shared Location',
+                                      style: TextStyle(
+                                        color: isMe ? Colors.white : scheme.onSurface,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Tap to open in Maps',
+                                      style: TextStyle(
+                                        color: isMe ? Colors.white.withOpacity(0.7) : scheme.onSurfaceVariant,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                    if (time != null)
+                                      Text(
+                                        DateFormat('h:mm a').format(time!),
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: isMe ? Colors.white.withOpacity(0.7) : scheme.onSurfaceVariant,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        )
+                      : Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                text,
+                                style: TextStyle(
+                                  color: isMe ? Colors.white : scheme.onSurface,
+                                  fontSize: 14,
+                                  height: 1.4,
+                                ),
+                              ),
+                              if (time != null) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  DateFormat('h:mm a').format(time!),
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: isMe ? Colors.white.withOpacity(0.7) : scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
             ),
           ),
           if (isMe) const SizedBox(width: 8),
