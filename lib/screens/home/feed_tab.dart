@@ -266,48 +266,38 @@ class _PaginatedList extends StatefulWidget {
 }
 
 class _PaginatedListState extends State<_PaginatedList> {
-  final _scrollCtrl = ScrollController();
-
-  @override
-  void initState() {
-    super.initState();
-    _scrollCtrl.addListener(_onScroll);
-  }
-
-  @override
-  void dispose() {
-    _scrollCtrl.dispose();
-    super.dispose();
-  }
-
-  void _onScroll() {
-    if (_scrollCtrl.position.pixels >= _scrollCtrl.position.maxScrollExtent - 200) {
-      final provider = context.read<ListingsProvider>();
-      if (widget.type == 'lost') {
-        provider.loadMoreLost();
-      } else if (widget.type == 'found') {
-        provider.loadMoreFound();
-      } else {
-        provider.loadMoreAll();
-      }
+  Future<void> _loadMore(ListingsProvider provider) {
+    switch (widget.type) {
+      case 'lost':
+        return provider.loadMoreLost();
+      case 'found':
+        return provider.loadMoreFound();
+      default:
+        return provider.loadMoreAll();
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
     return Consumer<ListingsProvider>(
       builder: (_, provider, __) {
         if (provider.isLoading) {
           return Shimmer.fromColors(
-            baseColor: Theme.of(context).colorScheme.surfaceVariant,
-            highlightColor: Theme.of(context).colorScheme.surface,
+            baseColor: scheme.surfaceVariant,
+            highlightColor: scheme.surface,
             child: ListView.separated(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
               itemCount: 5,
               separatorBuilder: (_, __) => const SizedBox(height: 8),
               itemBuilder: (_, __) => Container(
                 height: 80,
-                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
             ),
           );
@@ -327,35 +317,124 @@ class _PaginatedListState extends State<_PaginatedList> {
           hasMore = provider.hasMoreFound;
         } else {
           listings = provider.allListings;
-          isLoadingMore = provider.isLoadingMoreLost || provider.isLoadingMoreFound;
+          isLoadingMore = provider.isLoadingMoreAll;
           hasMore = provider.hasMoreAll;
         }
 
         if (listings.isEmpty) {
-          return Center(child: Text(widget.emptyMessage, style: Theme.of(context).textTheme.bodySmall));
+          return RefreshIndicator(
+            onRefresh: provider.refreshAll,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                SizedBox(
+                  height: MediaQuery.of(context).size.height * 0.5,
+                  child: Center(
+                    child: Text(
+                      widget.emptyMessage,
+                      style: textTheme.bodySmall,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
         }
 
-        return ListView.separated(
-          controller: _scrollCtrl,
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
-          itemCount: listings.length + (isLoadingMore || hasMore ? 1 : 0),
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (_, i) {
-            if (i == listings.length) {
-              if (isLoadingMore) {
-                return const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(16),
-                    child: CircularProgressIndicator(),
-                  ),
+        return RefreshIndicator(
+          onRefresh: provider.refreshAll,
+          child: ListView.separated(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
+            physics: const AlwaysScrollableScrollPhysics(),
+            itemCount: listings.length + 1, // +1 for footer (load more / end marker)
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (_, i) {
+              if (i == listings.length) {
+                return _LoadMoreFooter(
+                  isLoading: isLoadingMore,
+                  hasMore: hasMore,
+                  totalShown: listings.length,
+                  onLoadMore: () => _loadMore(provider),
                 );
               }
-              return const SizedBox.shrink();
-            }
-            return ListingCard(listing: listings[i]);
-          },
+              return ListingCard(listing: listings[i]);
+            },
+          ),
         );
       },
+    );
+  }
+}
+
+class _LoadMoreFooter extends StatelessWidget {
+  final bool isLoading;
+  final bool hasMore;
+  final int totalShown;
+  final VoidCallback onLoadMore;
+
+  const _LoadMoreFooter({
+    required this.isLoading,
+    required this.hasMore,
+    required this.totalShown,
+    required this.onLoadMore,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12, bottom: 8),
+      child: Column(
+        children: [
+          if (hasMore)
+            GestureDetector(
+              onTap: isLoading ? null : onLoadMore,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                decoration: BoxDecoration(
+                  color: scheme.surface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: scheme.outline),
+                ),
+                child: Center(
+                  child: isLoading
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.expand_more_rounded,
+                                size: 18, color: scheme.primary),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Load more',
+                              style: textTheme.bodyMedium?.copyWith(
+                                color: scheme.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                ),
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Text(
+                'Showing all $totalShown items',
+                style: textTheme.bodySmall
+                    ?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

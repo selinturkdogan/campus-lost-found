@@ -33,6 +33,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final _messageCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   bool _sending = false;
+  bool _didMarkRead = false;
 
   // Preview state
   File? _pendingImage;
@@ -42,6 +43,29 @@ class _ChatScreenState extends State<ChatScreen> {
   String _getChatId(String uid1, String uid2) {
     final sorted = [uid1, uid2]..sort();
     return '${sorted[0]}_${sorted[1]}';
+  }
+
+  /// Reset this user's unread counter on the chat doc.
+  /// Called once when the chat screen is opened so the messages list /
+  /// profile badge clear immediately.
+  Future<void> _markChatAsRead(String chatId, String myUid) async {
+    if (_didMarkRead) return;
+    _didMarkRead = true;
+    try {
+      await FirebaseFirestore.instance
+          .collection('listings')
+          .doc(widget.listingId)
+          .collection('chats')
+          .doc(chatId)
+          .set(
+        {
+          'unreadCounts': {myUid: 0},
+        },
+        SetOptions(merge: true),
+      );
+    } catch (_) {
+      // Non-fatal — user can keep chatting.
+    }
   }
 
   Future<void> _sendMessage({
@@ -292,6 +316,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final auth = context.watch<AuthProvider>();
     final chatId = _getChatId(auth.user!.uid, widget.otherUserId);
     final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    // Reset unread counter on first build for this user.
+    _markChatAsRead(chatId, auth.user!.uid);
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,

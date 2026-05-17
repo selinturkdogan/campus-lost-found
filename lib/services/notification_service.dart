@@ -67,6 +67,22 @@ class NotificationService {
   }
 
   Future<void> _saveToken() async {
+    await saveTokenForCurrentUser();
+  }
+
+  Future<void> _updateToken(String token) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .set({'fcmToken': token}, SetOptions(merge: true));
+  }
+
+  /// Save the current device's FCM token for the currently signed-in user.
+  /// Safe to call multiple times — used after a fresh sign-in to make sure
+  /// the token belongs to the right user (avoids cross-account push leaks).
+  Future<void> saveTokenForCurrentUser() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
     final token = await _messaging.getToken();
@@ -77,13 +93,18 @@ class NotificationService {
         .set({'fcmToken': token}, SetOptions(merge: true));
   }
 
-  Future<void> _updateToken(String token) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .set({'fcmToken': token}, SetOptions(merge: true));
+  /// Remove the FCM token from the given user's Firestore doc.
+  /// Call this on logout so the next user on the same device does not
+  /// receive notifications meant for the previous account.
+  Future<void> clearTokenForUser(String uid) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .update({'fcmToken': FieldValue.delete()});
+    } catch (_) {
+      // Ignore — doc may be missing or field may not exist.
+    }
   }
 
   void _handleForegroundMessage(RemoteMessage message) {

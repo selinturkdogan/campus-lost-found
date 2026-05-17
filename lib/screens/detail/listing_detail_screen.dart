@@ -3,6 +3,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../models/listing_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/listings_provider.dart';
@@ -220,6 +221,39 @@ class _LocationMapCardState extends State<_LocationMapCard> {
   @override
   void dispose() { _mapController?.dispose(); super.dispose(); }
 
+  Future<void> _openInGoogleMaps() async {
+    final lat = widget.coords.latitude;
+    final lng = widget.coords.longitude;
+    final label = Uri.encodeComponent(widget.locationName);
+
+    // Try the native Google Maps URI scheme first (Android/iOS app),
+    // then fall back to the universal web URL which the OS will route
+    // to the maps app if installed, or to the browser otherwise.
+    final candidates = <Uri>[
+      Uri.parse('geo:$lat,$lng?q=$lat,$lng($label)'),
+      Uri.parse(
+          'https://www.google.com/maps/search/?api=1&query=$lat,$lng'),
+    ];
+
+    for (final uri in candidates) {
+      try {
+        if (await canLaunchUrl(uri)) {
+          final ok =
+              await launchUrl(uri, mode: LaunchMode.externalApplication);
+          if (ok) return;
+        }
+      } catch (_) {
+        // Try next candidate.
+      }
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open Maps.')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -231,26 +265,92 @@ class _LocationMapCardState extends State<_LocationMapCard> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Location on Map', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 10),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(16),
-          child: Container(
-            height: 200,
-            decoration: BoxDecoration(
-              border: Border.all(color: scheme.outline.withOpacity(0.4)),
-              borderRadius: BorderRadius.circular(16),
+        Row(
+          children: [
+            Expanded(
+              child: Text('Location on Map',
+                  style: Theme.of(context).textTheme.titleMedium),
             ),
-            child: GoogleMap(
-              initialCameraPosition: CameraPosition(target: widget.coords, zoom: 16),
-              markers: {marker},
-              myLocationButtonEnabled: false,
-              zoomControlsEnabled: false,
-              mapToolbarEnabled: false,
-              onMapCreated: (controller) {
-                _mapController = controller;
-                if (widget.isDark) controller.setMapStyle(_darkMapStyle);
-              },
+            TextButton.icon(
+              onPressed: _openInGoogleMaps,
+              icon: Icon(Icons.open_in_new_rounded,
+                  size: 16, color: scheme.primary),
+              label: Text('Open in Maps',
+                  style: TextStyle(
+                      color: scheme.primary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13)),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        GestureDetector(
+          onTap: _openInGoogleMaps,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: Container(
+              height: 200,
+              decoration: BoxDecoration(
+                border: Border.all(color: scheme.outline.withOpacity(0.4)),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              // Wrap the map in IgnorePointer so taps go to the parent
+              // GestureDetector instead of being swallowed by the map.
+              // This lets the whole card act as an "open in Maps" button.
+              child: Stack(
+                children: [
+                  IgnorePointer(
+                    child: GoogleMap(
+                      initialCameraPosition: CameraPosition(
+                          target: widget.coords, zoom: 16),
+                      markers: {marker},
+                      myLocationButtonEnabled: false,
+                      zoomControlsEnabled: false,
+                      mapToolbarEnabled: false,
+                      liteModeEnabled: true,
+                      onMapCreated: (controller) {
+                        _mapController = controller;
+                        if (widget.isDark) {
+                          controller.setMapStyle(_darkMapStyle);
+                        }
+                      },
+                    ),
+                  ),
+                  // Hint overlay so users know the map is tappable
+                  Positioned(
+                    right: 10,
+                    bottom: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.7),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: const [
+                          Icon(Icons.touch_app_outlined,
+                              size: 12, color: Colors.white),
+                          SizedBox(width: 5),
+                          Text(
+                            'Tap to open',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

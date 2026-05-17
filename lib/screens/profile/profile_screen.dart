@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../providers/auth_provider.dart';
 import '../../utils/app_routes.dart';
 import '../../utils/app_theme.dart';
@@ -183,17 +184,7 @@ class ProfileScreen extends StatelessWidget {
               const SizedBox(height: 12),
 
               // Messages button — tüm authenticated kullanıcılar
-              _SettingsTile(
-                icon: Icons.message_outlined,
-                iconColor: const Color(0xFF0EA5E9),
-                title: 'Messages',
-                trailing: Icon(Icons.chevron_right_rounded,
-                    color: scheme.onSurfaceVariant),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const MessagesScreen()),
-                ),
-              ),
+              _MessagesTile(uid: auth.user!.uid),
               const SizedBox(height: 8),
 
               if (auth.isAdmin) ...[
@@ -211,6 +202,16 @@ class ProfileScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
               ],
+
+              _SettingsTile(
+                icon: Icons.lock_outline_rounded,
+                iconColor: const Color(0xFF7C3AED),
+                title: 'Change password',
+                trailing: Icon(Icons.chevron_right_rounded,
+                    color: scheme.onSurfaceVariant),
+                onTap: () => _showChangePasswordDialog(context),
+              ),
+              const SizedBox(height: 8),
 
               _SettingsTile(
                 icon: Icons.logout_rounded,
@@ -270,6 +271,207 @@ class ProfileScreen extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+
+  Future<void> _showChangePasswordDialog(BuildContext context) async {
+    final scheme = Theme.of(context).colorScheme;
+    final currentCtrl = TextEditingController();
+    final newCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    bool ob1 = true, ob2 = true, ob3 = true;
+    bool loading = false;
+    String? errorText;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          backgroundColor: scheme.surface,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text('Change password'),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: currentCtrl,
+                  obscureText: ob1,
+                  decoration: InputDecoration(
+                    labelText: 'Current password',
+                    suffixIcon: IconButton(
+                      icon: Icon(ob1
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined),
+                      onPressed: () => setLocal(() => ob1 = !ob1),
+                    ),
+                  ),
+                  validator: (v) =>
+                      v == null || v.isEmpty ? 'Current password required' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: newCtrl,
+                  obscureText: ob2,
+                  decoration: InputDecoration(
+                    labelText: 'New password',
+                    suffixIcon: IconButton(
+                      icon: Icon(ob2
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined),
+                      onPressed: () => setLocal(() => ob2 = !ob2),
+                    ),
+                  ),
+                  validator: (v) {
+                    if (v == null || v.isEmpty) return 'New password required';
+                    if (v.length < 8) return 'Must be at least 8 characters';
+                    if (!RegExp(r'[A-Za-z]').hasMatch(v) ||
+                        !RegExp(r'[0-9]').hasMatch(v)) {
+                      return 'Must contain letters and numbers';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: confirmCtrl,
+                  obscureText: ob3,
+                  decoration: InputDecoration(
+                    labelText: 'Confirm new password',
+                    suffixIcon: IconButton(
+                      icon: Icon(ob3
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined),
+                      onPressed: () => setLocal(() => ob3 = !ob3),
+                    ),
+                  ),
+                  validator: (v) =>
+                      v != newCtrl.text ? 'Passwords do not match' : null,
+                ),
+                if (errorText != null) ...[
+                  const SizedBox(height: 12),
+                  Text(errorText!,
+                      style: TextStyle(
+                          color: scheme.error, fontSize: 13)),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed:
+                  loading ? null : () => Navigator.pop(dialogCtx),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: loading
+                  ? null
+                  : () async {
+                      if (!formKey.currentState!.validate()) return;
+                      setLocal(() {
+                        loading = true;
+                        errorText = null;
+                      });
+                      final auth = context.read<AuthProvider>();
+                      final ok = await auth.changePassword(
+                        currentPassword: currentCtrl.text,
+                        newPassword: newCtrl.text,
+                      );
+                      if (!ctx.mounted) return;
+                      if (ok) {
+                        Navigator.pop(dialogCtx);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                              content: Text('Your password has been updated.')),
+                        );
+                      } else {
+                        setLocal(() {
+                          loading = false;
+                          errorText =
+                              auth.errorMessage ?? 'Could not change password.';
+                        });
+                      }
+                    },
+              child: loading
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MessagesTile extends StatelessWidget {
+  final String uid;
+  const _MessagesTile({required this.uid});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collectionGroup('chats')
+          .where('participants', arrayContains: uid)
+          .snapshots(),
+      builder: (context, snapshot) {
+        int totalUnread = 0;
+        if (snapshot.hasData) {
+          for (final doc in snapshot.data!.docs) {
+            final data = doc.data() as Map<String, dynamic>;
+            final counts =
+                Map<String, dynamic>.from(data['unreadCounts'] ?? {});
+            totalUnread += (counts[uid] as num?)?.toInt() ?? 0;
+          }
+        }
+
+        return _SettingsTile(
+          icon: Icons.message_outlined,
+          iconColor: const Color(0xFF0EA5E9),
+          title: 'Messages',
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (totalUnread > 0)
+                Container(
+                  margin: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 7, vertical: 2),
+                  constraints:
+                      const BoxConstraints(minWidth: 20, minHeight: 20),
+                  decoration: BoxDecoration(
+                    color: scheme.primary,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    totalUnread > 99 ? '99+' : '$totalUnread',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              Icon(Icons.chevron_right_rounded,
+                  color: scheme.onSurfaceVariant),
+            ],
+          ),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const MessagesScreen()),
+          ),
+        );
+      },
     );
   }
 }

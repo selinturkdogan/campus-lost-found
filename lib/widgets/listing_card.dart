@@ -146,7 +146,9 @@ class ListingCard extends StatelessWidget {
       return '${diff.inHours}h ago';
     }
     if (diff.inDays < 7) return '${diff.inDays}d ago';
-    return '${dt.day}/${dt.month}';
+    final d = dt.day.toString().padLeft(2, '0');
+    final m = dt.month.toString().padLeft(2, '0');
+    return '$d.$m.${dt.year}';
   }
 }
 

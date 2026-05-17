@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../utils/app_routes.dart';
 import '../utils/app_theme.dart';
 
@@ -36,21 +37,37 @@ class _SplashScreenState extends State<SplashScreen>
     await Future.delayed(const Duration(milliseconds: 1800));
     if (!mounted) return;
 
-    // Firebase Auth'un hazır olmasını bekle
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      Navigator.pushReplacementNamed(context, AppRoutes.feed);
-    } else {
-      // Bir kez daha bekle — token yenileniyor olabilir
-      await Future.delayed(const Duration(milliseconds: 500));
-      if (!mounted) return;
-      final userRetry = FirebaseAuth.instance.currentUser;
-      if (userRetry != null) {
-        Navigator.pushReplacementNamed(context, AppRoutes.feed);
-      } else {
-        Navigator.pushReplacementNamed(context, AppRoutes.login);
-      }
+    final user = FirebaseAuth.instance.currentUser ??
+        (await _waitForAuth(const Duration(milliseconds: 500)));
+
+    if (!mounted) return;
+    if (user == null) {
+      Navigator.pushReplacementNamed(context, AppRoutes.login);
+      return;
     }
+
+    // Check mustChangePassword flag from Firestore
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      final mustChange = doc.data()?['mustChangePassword'] == true;
+      if (!mounted) return;
+      if (mustChange) {
+        Navigator.pushReplacementNamed(context, AppRoutes.setPassword);
+      } else {
+        Navigator.pushReplacementNamed(context, AppRoutes.feed);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(context, AppRoutes.feed);
+    }
+  }
+
+  Future<User?> _waitForAuth(Duration extra) async {
+    await Future.delayed(extra);
+    return FirebaseAuth.instance.currentUser;
   }
 
   @override
@@ -78,19 +95,23 @@ class _SplashScreenState extends State<SplashScreen>
                     gradient: AppTheme.primaryGradient,
                     borderRadius: BorderRadius.circular(22),
                   ),
-                  child: const Icon(Icons.search_rounded, color: Colors.white, size: 40),
+                  child: const Icon(Icons.search_rounded,
+                      color: Colors.white, size: 40),
                 ),
                 const SizedBox(height: 20),
                 Text(
                   'Campus L&F',
-                  style: Theme.of(context).textTheme.displayMedium?.copyWith(letterSpacing: -1),
+                  style: Theme.of(context)
+                      .textTheme
+                      .displayMedium
+                      ?.copyWith(letterSpacing: -1),
                 ),
                 const SizedBox(height: 8),
                 Text(
                   'Lost & Found Board',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                 ),
                 const SizedBox(height: 48),
                 SizedBox(

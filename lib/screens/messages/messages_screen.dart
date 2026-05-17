@@ -219,6 +219,9 @@ class _ListingChatsCard extends StatelessWidget {
               final lastMessage = data['lastMessage']?.toString() ?? '';
               final lastMessageAt = (data['lastMessageAt'] as Timestamp?)?.toDate();
               final chatId = chat.id;
+              final unreadCounts =
+                  Map<String, dynamic>.from(data['unreadCounts'] ?? {});
+              final unread = (unreadCounts[uid] as num?)?.toInt() ?? 0;
 
               return Dismissible(
                 key: Key(chatId),
@@ -336,11 +339,27 @@ class _ListingChatsCard extends StatelessWidget {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(otherUserName, style: textTheme.titleSmall),
+                              Text(
+                                otherUserName,
+                                style: textTheme.titleSmall?.copyWith(
+                                  fontWeight: unread > 0
+                                      ? FontWeight.w700
+                                      : FontWeight.w500,
+                                ),
+                              ),
                               const SizedBox(height: 2),
                               Text(
-                                lastMessage.isEmpty ? 'No messages yet' : lastMessage,
-                                style: textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                                lastMessage.isEmpty
+                                    ? 'No messages yet'
+                                    : lastMessage,
+                                style: textTheme.bodySmall?.copyWith(
+                                  color: unread > 0
+                                      ? scheme.onSurface
+                                      : scheme.onSurfaceVariant,
+                                  fontWeight: unread > 0
+                                      ? FontWeight.w600
+                                      : FontWeight.normal,
+                                ),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -350,14 +369,45 @@ class _ListingChatsCard extends StatelessWidget {
                         const SizedBox(width: 8),
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.end,
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             if (lastMessageAt != null)
                               Text(
                                 DateFormat('h:mm a').format(lastMessageAt),
-                                style: textTheme.bodySmall,
+                                style: textTheme.bodySmall?.copyWith(
+                                  color: unread > 0
+                                      ? scheme.primary
+                                      : null,
+                                  fontWeight: unread > 0
+                                      ? FontWeight.w600
+                                      : FontWeight.normal,
+                                ),
                               ),
-                            const SizedBox(height: 4),
-                            Icon(Icons.arrow_forward_ios_rounded, size: 12, color: scheme.onSurfaceVariant),
+                            const SizedBox(height: 6),
+                            if (unread > 0)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 7, vertical: 2),
+                                constraints: const BoxConstraints(
+                                    minWidth: 20, minHeight: 20),
+                                decoration: BoxDecoration(
+                                  color: scheme.primary,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  unread > 99 ? '99+' : '$unread',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              )
+                            else
+                              Icon(Icons.arrow_forward_ios_rounded,
+                                  size: 12,
+                                  color: scheme.onSurfaceVariant),
                           ],
                         ),
                       ],

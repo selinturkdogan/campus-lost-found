@@ -17,21 +17,18 @@ class ListingsProvider extends ChangeNotifier {
   DocumentSnapshot? _lastAllDoc;
   bool _hasMoreAll = true;
   bool _isLoadingMoreAll = false;
-  StreamSubscription? _allSub;
 
   // Lost listings
   List<ListingModel> _lostListings = [];
   DocumentSnapshot? _lastLostDoc;
   bool _hasMoreLost = true;
   bool _isLoadingMoreLost = false;
-  StreamSubscription? _lostSub;
 
   // Found listings
   List<ListingModel> _foundListings = [];
   DocumentSnapshot? _lastFoundDoc;
   bool _hasMoreFound = true;
   bool _isLoadingMoreFound = false;
-  StreamSubscription? _foundSub;
 
   List<ListingModel> _cachedListings = [];
 
@@ -96,19 +93,7 @@ class ListingsProvider extends ChangeNotifier {
       _hasMoreAll = snap.docs.length == _pageSize;
       _isOffline = false;
       _cacheListings(_allListings);
-
-      _allSub?.cancel();
-      _allSub = _firestore
-          .collection('listings')
-          .where('isResolved', isEqualTo: false)
-          .orderBy('createdAt', descending: true)
-          .limit(_pageSize)
-          .snapshots()
-          .listen((snapshot) {
-        _allListings = snapshot.docs.map(ListingModel.fromFirestore).toList();
-        _isOffline = false;
-        notifyListeners();
-      }, onError: (e) => _handleStreamError(e));
+      notifyListeners();
     } catch (e) {
       _handleStreamError(e);
     }
@@ -154,19 +139,7 @@ class ListingsProvider extends ChangeNotifier {
       _lostListings = snap.docs.map(ListingModel.fromFirestore).toList();
       _lastLostDoc = snap.docs.isNotEmpty ? snap.docs.last : null;
       _hasMoreLost = snap.docs.length == _pageSize;
-
-      _lostSub?.cancel();
-      _lostSub = _firestore
-          .collection('listings')
-          .where('type', isEqualTo: 'lost')
-          .where('isResolved', isEqualTo: false)
-          .orderBy('createdAt', descending: true)
-          .limit(_pageSize)
-          .snapshots()
-          .listen((snapshot) {
-        _lostListings = snapshot.docs.map(ListingModel.fromFirestore).toList();
-        notifyListeners();
-      }, onError: (e) => _handleStreamError(e));
+      notifyListeners();
     } catch (e) {
       _handleStreamError(e);
     }
@@ -212,19 +185,7 @@ class ListingsProvider extends ChangeNotifier {
       _foundListings = snap.docs.map(ListingModel.fromFirestore).toList();
       _lastFoundDoc = snap.docs.isNotEmpty ? snap.docs.last : null;
       _hasMoreFound = snap.docs.length == _pageSize;
-
-      _foundSub?.cancel();
-      _foundSub = _firestore
-          .collection('listings')
-          .where('type', isEqualTo: 'found')
-          .where('isResolved', isEqualTo: false)
-          .orderBy('createdAt', descending: true)
-          .limit(_pageSize)
-          .snapshots()
-          .listen((snapshot) {
-        _foundListings = snapshot.docs.map(ListingModel.fromFirestore).toList();
-        notifyListeners();
-      }, onError: (e) => _handleStreamError(e));
+      notifyListeners();
     } catch (e) {
       _handleStreamError(e);
     }
@@ -257,9 +218,27 @@ class ListingsProvider extends ChangeNotifier {
   }
 
   void stopListening() {
-    _allSub?.cancel();
-    _lostSub?.cancel();
-    _foundSub?.cancel();
+    // No-op now that snapshots listeners have been removed.
+    // Kept for API compatibility with existing callers.
+  }
+
+  /// Reset state and re-fetch the first page for all three tabs.
+  /// Used by pull-to-refresh or after a new listing is created.
+  Future<void> refreshAll() async {
+    _hasMoreAll = true;
+    _hasMoreLost = true;
+    _hasMoreFound = true;
+    _lastAllDoc = null;
+    _lastLostDoc = null;
+    _lastFoundDoc = null;
+    _errorMessage = null;
+    _setLoading(true);
+    await Future.wait([
+      _loadInitialAll(),
+      _loadInitialLost(),
+      _loadInitialFound(),
+    ]);
+    _setLoading(false);
   }
 
   Future<bool> createListing({
@@ -295,6 +274,7 @@ class ListingsProvider extends ChangeNotifier {
           DateTime.now().add(const Duration(days: 60)),
         ),
       });
+      await refreshAll();
       return true;
     } catch (e) {
       _errorMessage = 'Failed to create listing. Please try again.';
@@ -328,6 +308,7 @@ class ListingsProvider extends ChangeNotifier {
         'photoUrl': photoUrl,
         'updatedAt': FieldValue.serverTimestamp(),
       });
+      await refreshAll();
       return true;
     } catch (e) {
       _errorMessage = 'Failed to update listing.';
@@ -342,6 +323,7 @@ class ListingsProvider extends ChangeNotifier {
         await _storage.ref('listing_images/$ownerId/$listingId.jpg').delete();
       } catch (_) {}
       await _firestore.collection('listings').doc(listingId).delete();
+      await refreshAll();
       return true;
     } catch (e) {
       _errorMessage = 'Failed to delete listing.';
@@ -356,6 +338,7 @@ class ListingsProvider extends ChangeNotifier {
         'isResolved': true,
         'updatedAt': FieldValue.serverTimestamp(),
       });
+      await refreshAll();
       return true;
     } catch (e) {
       _errorMessage = 'Failed to mark as resolved.';
@@ -372,6 +355,7 @@ class ListingsProvider extends ChangeNotifier {
         ),
         'updatedAt': FieldValue.serverTimestamp(),
       });
+      await refreshAll();
       return true;
     } catch (e) {
       _errorMessage = 'Failed to extend listing.';

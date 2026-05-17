@@ -15,12 +15,15 @@ import 'utils/app_theme.dart';
 
 import 'screens/splash_screen.dart';
 import 'screens/auth/login_screen.dart';
+import 'screens/auth/set_password_screen.dart';
 import 'screens/home/home_screen.dart';
 import 'screens/detail/listing_detail_screen.dart';
 import 'screens/post/post_form_screen.dart';
 
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
 
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
@@ -82,6 +85,8 @@ class _CampusLostFoundAppState extends State<CampusLostFoundApp> {
         return _fade(SplashScreen(toggleTheme: _toggleTheme));
       case AppRoutes.login:
         return _slide(const LoginScreen());
+      case AppRoutes.setPassword:
+        return _fade(const SetPasswordScreen());
       case AppRoutes.feed:
         return _fade(HomeScreen(toggleTheme: _toggleTheme, themeMode: _themeMode));
       case AppRoutes.listingDetail:
