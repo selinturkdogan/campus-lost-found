@@ -65,6 +65,8 @@ class _PostFormScreenState extends State<PostFormScreen> {
         existingPhotoUrl: form.existingPhotoUrl,
         newImageFile: form.imageFile,
         ownerId: user.uid,
+        chatEnabled: form.chatEnabled,
+        pickupNote: form.chatEnabled ? null : form.pickupNote.trim(),
       );
     } else {
       final ownerName = auth.displayName;
@@ -78,14 +80,22 @@ class _PostFormScreenState extends State<PostFormScreen> {
         ownerEmail: user.email ?? '',
         ownerName: ownerName,
         imageFile: form.imageFile,
+        chatEnabled: form.chatEnabled,
+        pickupNote: form.chatEnabled ? null : form.pickupNote.trim(),
       );
 
       if (success) {
-        await NotificationService.sendNewListingNotification(
+        // Fire-and-forget: this writes to a top-level `notifications`
+        // queue intended for a fan-out Cloud Function. Don't block the
+        // submit on it — and don't crash the UI if the rules deny it.
+        // ignore: discarded_futures
+        NotificationService.sendNewListingNotification(
           type: form.type,
           itemTitle: form.title,
           location: form.location!,
-        );
+        ).catchError((_) {
+          // Non-fatal — the listing itself was created successfully.
+        });
       }
     }
 
@@ -141,40 +151,34 @@ class _PostFormScreenState extends State<PostFormScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const SizedBox(height: 8),
-                        _Label('Item Type'),
-                        const SizedBox(height: 8),
+                        _Label('What kind of post is this?'),
+                        const SizedBox(height: 12),
                         Row(
-                          children: ['lost', 'found'].map((type) {
-                            final isSelected = form.type == type;
-                            return Expanded(
-                              child: GestureDetector(
-                                onTap: () => form.setType(type),
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 180),
-                                  margin: EdgeInsets.only(right: type == 'lost' ? 8 : 0),
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  decoration: BoxDecoration(
-                                    color: isSelected ? scheme.primary.withOpacity(0.05) : scheme.surfaceVariant,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: isSelected ? scheme.primary : scheme.outline,
-                                      width: isSelected ? 2 : 1,
-                                    ),
-                                  ),
-                                  child: Text(
-                                    type == 'lost' ? 'Lost' : 'Found',
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w500,
-                                      color: isSelected ? scheme.primary : scheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ),
+                          children: [
+                            Expanded(
+                              child: _TypeCard(
+                                isSelected: form.type == 'lost',
+                                color: const Color(0xFFFF6B6B),
+                                icon: Icons.search_rounded,
+                                title: 'I LOST IT',
+                                subtitle: 'Looking for my missing item',
+                                onTap: () => form.setType('lost'),
                               ),
-                            );
-                          }).toList(),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: _TypeCard(
+                                isSelected: form.type == 'found',
+                                color: const Color(0xFF4CAF50),
+                                icon: Icons.emoji_objects_outlined,
+                                title: 'I FOUND IT',
+                                subtitle: 'Looking for the owner',
+                                onTap: () => form.setType('found'),
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 20),
+                        const SizedBox(height: 24),
                         _Label('Title *'),
                         const SizedBox(height: 8),
                         TextFormField(
@@ -228,6 +232,10 @@ class _PostFormScreenState extends State<PostFormScreen> {
                         _Label('Photo (optional)'),
                         const SizedBox(height: 8),
                         _PhotoPicker(form: form),
+                        const SizedBox(height: 24),
+
+                        // Chat toggle + pickup note (when chat disabled)
+                        _ChatToggleSection(form: form),
                         const SizedBox(height: 32),
                         Row(
                           children: [
@@ -269,6 +277,186 @@ class _Label extends StatelessWidget {
   const _Label(this.text);
   @override
   Widget build(BuildContext context) => Text(text, style: Theme.of(context).textTheme.labelLarge);
+}
+
+class _ChatToggleSection extends StatelessWidget {
+  final PostFormProvider form;
+  const _ChatToggleSection({required this.form});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: scheme.surfaceVariant.withOpacity(0.4),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+            child: Row(
+              children: [
+                Icon(
+                  form.chatEnabled
+                      ? Icons.chat_bubble_outline_rounded
+                      : Icons.chat_bubble_outline_rounded,
+                  size: 20,
+                  color: form.chatEnabled
+                      ? scheme.primary
+                      : scheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Allow chat',
+                        style: textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        form.chatEnabled
+                            ? 'People can message you about this item.'
+                            : 'Chat disabled — add pickup instructions below.',
+                        style: textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch.adaptive(
+                  value: form.chatEnabled,
+                  onChanged: form.setChatEnabled,
+                  activeColor: scheme.primary,
+                ),
+              ],
+            ),
+          ),
+          // Pickup note appears only when chat is disabled
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeInOut,
+            child: form.chatEnabled
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Divider(color: scheme.outline, height: 12),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Pickup instructions *',
+                          style: textTheme.labelLarge,
+                        ),
+                        const SizedBox(height: 8),
+                        TextFormField(
+                          initialValue: form.pickupNote,
+                          onChanged: form.setPickupNote,
+                          maxLines: 2,
+                          textCapitalization: TextCapitalization.sentences,
+                          decoration: const InputDecoration(
+                            hintText:
+                                'e.g. Find it at the Information Desk (Danışma)',
+                          ),
+                          validator: (_) => form.validatePickupNote(),
+                        ),
+                      ],
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TypeCard extends StatelessWidget {
+  final bool isSelected;
+  final Color color;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _TypeCard({
+    required this.isSelected,
+    required this.color,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
+        decoration: BoxDecoration(
+          color: isSelected ? color.withOpacity(0.12) : scheme.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isSelected ? color : scheme.outline,
+            width: isSelected ? 2 : 1,
+          ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: color.withOpacity(0.18),
+                    blurRadius: 14,
+                    offset: const Offset(0, 4),
+                  ),
+                ]
+              : null,
+        ),
+        child: Column(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.18),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: color, size: 22),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: isSelected ? color : scheme.onSurface,
+                letterSpacing: 0.4,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11,
+                color: scheme.onSurfaceVariant,
+                height: 1.3,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _PhotoPicker extends StatelessWidget {

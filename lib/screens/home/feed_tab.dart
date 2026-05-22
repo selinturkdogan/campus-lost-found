@@ -21,7 +21,7 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: 3, vsync: this);
+    _tabCtrl = TabController(length: 2, vsync: this);
   }
 
   @override
@@ -53,8 +53,12 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
                           Text('Lost & Found', style: textTheme.titleLarge),
                           Consumer<ListingsProvider>(
                             builder: (_, provider, __) {
-                              final count = provider.lostListings.length + provider.foundListings.length;
-                              return Text('$count items', style: textTheme.bodySmall);
+                              final lostCount = provider.lostListings.length;
+                              final foundCount = provider.foundListings.length;
+                              return Text(
+                                '$lostCount lost · $foundCount found',
+                                style: textTheme.bodySmall,
+                              );
                             },
                           ),
                         ],
@@ -90,8 +94,74 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
                   ),
                   child: TabBar(
                     controller: _tabCtrl,
-                    tabs: const [Tab(text: 'All'), Tab(text: 'Lost'), Tab(text: 'Found')],
-                    indicatorWeight: 2,
+                    indicatorWeight: 3,
+                    labelColor: scheme.primary,
+                    unselectedLabelColor: scheme.onSurfaceVariant,
+                    labelPadding: const EdgeInsets.symmetric(vertical: 6),
+                    tabs: [
+                      Tab(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFFFF6B6B),
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                const Text('Lost',
+                                    style: TextStyle(fontWeight: FontWeight.w600)),
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Help find it',
+                              style: textTheme.bodySmall?.copyWith(
+                                fontSize: 10,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Tab(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFF4CAF50),
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                const Text('Found',
+                                    style: TextStyle(fontWeight: FontWeight.w600)),
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Is it yours?',
+                              style: textTheme.bodySmall?.copyWith(
+                                fontSize: 10,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -167,9 +237,16 @@ class _FeedTabState extends State<FeedTab> with SingleTickerProviderStateMixin {
             child: TabBarView(
               controller: _tabCtrl,
               children: [
-                _PaginatedList(type: 'all', emptyMessage: 'No items posted yet.'),
-                _PaginatedList(type: 'lost', emptyMessage: 'No lost items reported.'),
-                _PaginatedList(type: 'found', emptyMessage: 'No found items reported.'),
+                _PaginatedList(
+                  type: 'lost',
+                  emptyMessage:
+                      'No lost items reported yet.\nWhen someone loses an item, it will appear here.',
+                ),
+                _PaginatedList(
+                  type: 'found',
+                  emptyMessage:
+                      'No found items reported yet.\nWhen someone finds an item, it will appear here.',
+                ),
               ],
             ),
           ),

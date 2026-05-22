@@ -251,6 +251,8 @@ class ListingsProvider extends ChangeNotifier {
     required String ownerEmail,
     required String ownerName,
     File? imageFile,
+    bool chatEnabled = true,
+    String? pickupNote,
   }) async {
     try {
       final docRef = _firestore.collection('listings').doc();
@@ -269,6 +271,8 @@ class ListingsProvider extends ChangeNotifier {
         'ownerEmail': ownerEmail,
         'ownerName': ownerName,
         'isResolved': false,
+        'chatEnabled': chatEnabled,
+        'pickupNote': pickupNote,
         'createdAt': FieldValue.serverTimestamp(),
         'expiresAt': Timestamp.fromDate(
           DateTime.now().add(const Duration(days: 60)),
@@ -293,6 +297,8 @@ class ListingsProvider extends ChangeNotifier {
     String? existingPhotoUrl,
     File? newImageFile,
     required String ownerId,
+    bool chatEnabled = true,
+    String? pickupNote,
   }) async {
     try {
       String? photoUrl = existingPhotoUrl;
@@ -306,6 +312,8 @@ class ListingsProvider extends ChangeNotifier {
         'location': location,
         'category': category,
         'photoUrl': photoUrl,
+        'chatEnabled': chatEnabled,
+        'pickupNote': pickupNote,
         'updatedAt': FieldValue.serverTimestamp(),
       });
       await refreshAll();

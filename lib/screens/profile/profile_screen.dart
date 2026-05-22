@@ -4,7 +4,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../providers/auth_provider.dart';
 import '../../utils/app_routes.dart';
 import '../../utils/app_theme.dart';
+import '../../widgets/user_avatar.dart';
 import '../admin/admin_panel_screen.dart';
+import '../admin/domain_settings_screen.dart';
 import '../messages/messages_screen.dart';
 
 class ProfileScreen extends StatelessWidget {
@@ -35,89 +37,100 @@ class ProfileScreen extends StatelessWidget {
             const SizedBox(height: 28),
 
             if (auth.isAuthenticated)
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  gradient: AppTheme.primaryGradient,
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF7C3AED).withOpacity(0.3),
-                      blurRadius: 20,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 56,
-                      height: 56,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        shape: BoxShape.circle,
+              GestureDetector(
+                onTap: () =>
+                    Navigator.pushNamed(context, AppRoutes.editProfile),
+                child: Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    gradient: AppTheme.primaryGradient,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF7C3AED).withOpacity(0.3),
+                        blurRadius: 20,
+                        offset: const Offset(0, 8),
                       ),
-                      child: Center(
-                        child: Text(
-                          auth.displayName[0].toUpperCase(),
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w700),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      UserAvatar(
+                        photoUrl: auth.photoUrl,
+                        fallbackName: auth.displayName,
+                        size: 56,
+                        backgroundColor: Colors.white.withOpacity(0.2),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    auth.displayName,
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                                if (auth.isAdmin)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.2),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: const Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.shield_rounded,
+                                            size: 12, color: Colors.white),
+                                        SizedBox(width: 4),
+                                        Text('Admin',
+                                            style: TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w600)),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              auth.user?.email ?? '',
+                              style: TextStyle(
+                                  color: Colors.white.withOpacity(0.8),
+                                  fontSize: 13),
+                            ),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
+                                const Icon(Icons.edit_outlined,
+                                    size: 12, color: Colors.white),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'Tap to edit profile',
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(0.85),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  auth.displayName,
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w600),
-                                ),
-                              ),
-                              if (auth.isAdmin)
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 8, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.2),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: const Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(Icons.shield_rounded,
-                                          size: 12, color: Colors.white),
-                                      SizedBox(width: 4),
-                                      Text('Admin',
-                                          style: TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w600)),
-                                    ],
-                                  ),
-                                ),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            auth.user?.email ?? '',
-                            style: TextStyle(
-                                color: Colors.white.withOpacity(0.8),
-                                fontSize: 13),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                      Icon(Icons.chevron_right_rounded,
+                          color: Colors.white.withOpacity(0.8)),
+                    ],
+                  ),
                 ),
               )
             else
@@ -183,10 +196,7 @@ class ProfileScreen extends StatelessWidget {
               _SectionLabel('Account'),
               const SizedBox(height: 12),
 
-              // Messages button — tüm authenticated kullanıcılar
-              _MessagesTile(uid: auth.user!.uid),
-              const SizedBox(height: 8),
-
+              // Admin tiles come first so they're prominent for admins
               if (auth.isAdmin) ...[
                 _SettingsTile(
                   icon: Icons.admin_panel_settings_rounded,
@@ -201,7 +211,25 @@ class ProfileScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 8),
+
+                _SettingsTile(
+                  icon: Icons.public_rounded,
+                  iconColor: const Color(0xFF0EA5E9),
+                  title: 'Allowed Domains',
+                  trailing: Icon(Icons.chevron_right_rounded,
+                      color: scheme.onSurfaceVariant),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const DomainSettingsScreen()),
+                  ),
+                ),
+                const SizedBox(height: 8),
               ],
+
+              // Messages button — for all authenticated users
+              _MessagesTile(uid: auth.user!.uid),
+              const SizedBox(height: 8),
 
               _SettingsTile(
                 icon: Icons.lock_outline_rounded,
@@ -257,16 +285,6 @@ class ProfileScreen extends StatelessWidget {
               ),
             ],
 
-            const SizedBox(height: 24),
-            _SectionLabel('About'),
-            const SizedBox(height: 12),
-            _SettingsTile(
-              icon: Icons.info_outline_rounded,
-              iconColor: scheme.primary,
-              title: 'Version 1.0.0',
-              trailing: const SizedBox.shrink(),
-            ),
-
             const SizedBox(height: 40),
           ],
         ),
@@ -275,135 +293,387 @@ class ProfileScreen extends StatelessWidget {
   }
 
   Future<void> _showChangePasswordDialog(BuildContext context) async {
-    final scheme = Theme.of(context).colorScheme;
-    final currentCtrl = TextEditingController();
-    final newCtrl = TextEditingController();
-    final confirmCtrl = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-    bool ob1 = true, ob2 = true, ob3 = true;
-    bool loading = false;
-    String? errorText;
-
-    await showDialog<void>(
+    await showModalBottomSheet<void>(
       context: context,
-      barrierDismissible: false,
-      builder: (dialogCtx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          backgroundColor: scheme.surface,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Text('Change password'),
-          content: Form(
-            key: formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  controller: currentCtrl,
-                  obscureText: ob1,
-                  decoration: InputDecoration(
-                    labelText: 'Current password',
-                    suffixIcon: IconButton(
-                      icon: Icon(ob1
-                          ? Icons.visibility_outlined
-                          : Icons.visibility_off_outlined),
-                      onPressed: () => setLocal(() => ob1 = !ob1),
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      // Keep the sheet on screen even while the keyboard is open.
+      builder: (_) => const _ChangePasswordSheet(),
+    );
+  }
+}
+
+/// Polished, full-feeling change-password sheet. Sized to ~85% of the
+/// screen height so it doesn't look like a tiny dialog.
+class _ChangePasswordSheet extends StatefulWidget {
+  const _ChangePasswordSheet();
+
+  @override
+  State<_ChangePasswordSheet> createState() => _ChangePasswordSheetState();
+}
+
+class _ChangePasswordSheetState extends State<_ChangePasswordSheet> {
+  final _formKey = GlobalKey<FormState>();
+  final _currentCtrl = TextEditingController();
+  final _newCtrl = TextEditingController();
+  final _confirmCtrl = TextEditingController();
+
+  bool _ob1 = true, _ob2 = true, _ob3 = true;
+  bool _loading = false;
+  String? _errorText;
+
+  @override
+  void dispose() {
+    _currentCtrl.dispose();
+    _newCtrl.dispose();
+    _confirmCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() {
+      _loading = true;
+      _errorText = null;
+    });
+    final auth = context.read<AuthProvider>();
+    final ok = await auth.changePassword(
+      currentPassword: _currentCtrl.text,
+      newPassword: _newCtrl.text,
+    );
+    if (!mounted) return;
+    if (ok) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Your password has been updated.')),
+      );
+    } else {
+      setState(() {
+        _loading = false;
+        _errorText = auth.errorMessage ?? 'Could not change password.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final mq = MediaQuery.of(context);
+    final auth = context.watch<AuthProvider>();
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.85,
+      minChildSize: 0.6,
+      maxChildSize: 0.95,
+      expand: false,
+      builder: (_, scrollCtrl) => Container(
+        decoration: BoxDecoration(
+          color: scheme.surface,
+          borderRadius:
+              const BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          children: [
+            // Drag handle
+            Padding(
+              padding: const EdgeInsets.only(top: 10, bottom: 6),
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: scheme.outline,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 6, 12, 8),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      gradient: AppTheme.primaryGradient,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.lock_outline_rounded,
+                        color: Colors.white, size: 22),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Change password',
+                            style: textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            )),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Keep your account secure with a new password.',
+                          style: textTheme.bodySmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  validator: (v) =>
-                      v == null || v.isEmpty ? 'Current password required' : null,
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: newCtrl,
-                  obscureText: ob2,
-                  decoration: InputDecoration(
-                    labelText: 'New password',
-                    suffixIcon: IconButton(
-                      icon: Icon(ob2
-                          ? Icons.visibility_outlined
-                          : Icons.visibility_off_outlined),
-                      onPressed: () => setLocal(() => ob2 = !ob2),
-                    ),
+                  IconButton(
+                    onPressed: _loading ? null : () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded),
                   ),
-                  validator: (v) {
-                    if (v == null || v.isEmpty) return 'New password required';
-                    if (v.length < 8) return 'Must be at least 8 characters';
-                    if (!RegExp(r'[A-Za-z]').hasMatch(v) ||
-                        !RegExp(r'[0-9]').hasMatch(v)) {
-                      return 'Must contain letters and numbers';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: confirmCtrl,
-                  obscureText: ob3,
-                  decoration: InputDecoration(
-                    labelText: 'Confirm new password',
-                    suffixIcon: IconButton(
-                      icon: Icon(ob3
-                          ? Icons.visibility_outlined
-                          : Icons.visibility_off_outlined),
-                      onPressed: () => setLocal(() => ob3 = !ob3),
-                    ),
-                  ),
-                  validator: (v) =>
-                      v != newCtrl.text ? 'Passwords do not match' : null,
-                ),
-                if (errorText != null) ...[
-                  const SizedBox(height: 12),
-                  Text(errorText!,
-                      style: TextStyle(
-                          color: scheme.error, fontSize: 13)),
                 ],
-              ],
+              ),
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed:
-                  loading ? null : () => Navigator.pop(dialogCtx),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: loading
-                  ? null
-                  : () async {
-                      if (!formKey.currentState!.validate()) return;
-                      setLocal(() {
-                        loading = true;
-                        errorText = null;
-                      });
-                      final auth = context.read<AuthProvider>();
-                      final ok = await auth.changePassword(
-                        currentPassword: currentCtrl.text,
-                        newPassword: newCtrl.text,
-                      );
-                      if (!ctx.mounted) return;
-                      if (ok) {
-                        Navigator.pop(dialogCtx);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                              content: Text('Your password has been updated.')),
-                        );
-                      } else {
-                        setLocal(() {
-                          loading = false;
-                          errorText =
-                              auth.errorMessage ?? 'Could not change password.';
-                        });
-                      }
-                    },
-              child: loading
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Text('Save'),
+            Divider(color: scheme.outline, height: 1),
+
+            // Scrollable body
+            Expanded(
+              child: SingleChildScrollView(
+                controller: scrollCtrl,
+                padding: EdgeInsets.fromLTRB(
+                    20, 20, 20, 20 + mq.viewInsets.bottom),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Email chip for context
+                      if (auth.user?.email != null)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: scheme.surfaceVariant.withOpacity(0.6),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.person_outline_rounded,
+                                  size: 16,
+                                  color: scheme.onSurfaceVariant),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  auth.user!.email!,
+                                  style: textTheme.bodySmall,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      const SizedBox(height: 24),
+
+                      _label(context, 'Current password'),
+                      const SizedBox(height: 8),
+                      _passwordField(
+                        controller: _currentCtrl,
+                        obscure: _ob1,
+                        onToggle: () => setState(() => _ob1 = !_ob1),
+                        hint: 'Enter your current password',
+                        validator: (v) => v == null || v.isEmpty
+                            ? 'Current password required'
+                            : null,
+                      ),
+                      const SizedBox(height: 20),
+
+                      _label(context, 'New password'),
+                      const SizedBox(height: 8),
+                      _passwordField(
+                        controller: _newCtrl,
+                        obscure: _ob2,
+                        onToggle: () => setState(() => _ob2 = !_ob2),
+                        hint: 'At least 8 characters',
+                        validator: (v) {
+                          if (v == null || v.isEmpty) {
+                            return 'New password required';
+                          }
+                          if (v.length < 8) {
+                            return 'Must be at least 8 characters';
+                          }
+                          if (!RegExp(r'[A-Za-z]').hasMatch(v) ||
+                              !RegExp(r'[0-9]').hasMatch(v)) {
+                            return 'Must contain letters and numbers';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Icon(Icons.info_outline_rounded,
+                              size: 13, color: scheme.onSurfaceVariant),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Use 8+ characters with a mix of letters and numbers.',
+                              style: textTheme.bodySmall?.copyWith(
+                                fontSize: 11.5,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+
+                      _label(context, 'Confirm new password'),
+                      const SizedBox(height: 8),
+                      _passwordField(
+                        controller: _confirmCtrl,
+                        obscure: _ob3,
+                        onToggle: () => setState(() => _ob3 = !_ob3),
+                        hint: 'Type the new password again',
+                        validator: (v) => v != _newCtrl.text
+                            ? 'Passwords do not match'
+                            : null,
+                      ),
+
+                      if (_errorText != null) ...[
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: scheme.error.withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                                color: scheme.error.withOpacity(0.3)),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.error_outline_rounded,
+                                  size: 16, color: scheme.error),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _errorText!,
+                                  style: textTheme.bodySmall?.copyWith(
+                                    color: scheme.error,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+
+                      const SizedBox(height: 28),
+                      _GradientSaveBtn(
+                        loading: _loading,
+                        onTap: _submit,
+                      ),
+                      const SizedBox(height: 12),
+                      Center(
+                        child: TextButton(
+                          onPressed:
+                              _loading ? null : () => Navigator.pop(context),
+                          child: Text(
+                            'Cancel',
+                            style: textTheme.bodyMedium?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _label(BuildContext context, String text) {
+    return Text(
+      text,
+      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+            color: Theme.of(context).colorScheme.onSurface,
+            fontWeight: FontWeight.w600,
+          ),
+    );
+  }
+
+  Widget _passwordField({
+    required TextEditingController controller,
+    required bool obscure,
+    required VoidCallback onToggle,
+    required String hint,
+    required String? Function(String?) validator,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return TextFormField(
+      controller: controller,
+      obscureText: obscure,
+      decoration: InputDecoration(
+        hintText: hint,
+        prefixIcon: Icon(Icons.lock_outline_rounded,
+            size: 20, color: scheme.onSurfaceVariant),
+        suffixIcon: IconButton(
+          icon: Icon(
+            obscure
+                ? Icons.visibility_outlined
+                : Icons.visibility_off_outlined,
+            size: 20,
+            color: scheme.onSurfaceVariant,
+          ),
+          onPressed: onToggle,
+        ),
+      ),
+      validator: validator,
+    );
+  }
+}
+
+class _GradientSaveBtn extends StatelessWidget {
+  final bool loading;
+  final VoidCallback onTap;
+
+  const _GradientSaveBtn({required this.loading, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: loading ? null : onTap,
+      child: Container(
+        width: double.infinity,
+        height: 52,
+        decoration: BoxDecoration(
+          gradient: AppTheme.primaryGradient,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF7C3AED).withOpacity(0.3),
+              blurRadius: 18,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Center(
+          child: loading
+              ? const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                      color: Colors.white, strokeWidth: 2),
+                )
+              : const Text(
+                  'Save new password',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.2,
+                  ),
+                ),
         ),
       ),
     );

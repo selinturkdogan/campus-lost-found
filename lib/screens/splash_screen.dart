@@ -88,15 +88,10 @@ class _SplashScreenState extends State<SplashScreen>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    gradient: AppTheme.primaryGradient,
-                    borderRadius: BorderRadius.circular(22),
-                  ),
-                  child: const Icon(Icons.search_rounded,
-                      color: Colors.white, size: 40),
+                Image.asset(
+                  'assets/logo/png/icon-app-solid-1024.png',
+                  width: 110,
+                  height: 110,
                 ),
                 const SizedBox(height: 20),
                 Text(

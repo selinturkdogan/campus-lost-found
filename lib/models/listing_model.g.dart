@@ -26,13 +26,16 @@ class ListingModelAdapter extends TypeAdapter<ListingModel> {
       createdAt: fields[10] as DateTime,
       updatedAt: fields[11] as DateTime?,
       category: fields[12] as String?,
+      chatEnabled: fields[13] as bool? ?? true,
+      pickupNote: fields[14] as String?,
+      commentCount: (fields[15] as int?) ?? 0,
     );
   }
 
   @override
   void write(BinaryWriter writer, ListingModel obj) {
     writer
-      ..writeByte(13)
+      ..writeByte(16)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -58,7 +61,13 @@ class ListingModelAdapter extends TypeAdapter<ListingModel> {
       ..writeByte(11)
       ..write(obj.updatedAt)
       ..writeByte(12)
-      ..write(obj.category);
+      ..write(obj.category)
+      ..writeByte(13)
+      ..write(obj.chatEnabled)
+      ..writeByte(14)
+      ..write(obj.pickupNote)
+      ..writeByte(15)
+      ..write(obj.commentCount);
   }
 
   @override

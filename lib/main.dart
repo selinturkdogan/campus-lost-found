@@ -16,6 +16,7 @@ import 'utils/app_theme.dart';
 import 'screens/splash_screen.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/set_password_screen.dart';
+import 'screens/profile/edit_profile_screen.dart';
 import 'screens/home/home_screen.dart';
 import 'screens/detail/listing_detail_screen.dart';
 import 'screens/post/post_form_screen.dart';
@@ -95,6 +96,8 @@ class _CampusLostFoundAppState extends State<CampusLostFoundApp> {
       case AppRoutes.postForm:
         final listing = settings.arguments as dynamic;
         return _slideUp(PostFormScreen(existingListing: listing));
+      case AppRoutes.editProfile:
+        return _slide(const EditProfileScreen());
       default:
         return _fade(SplashScreen(toggleTheme: _toggleTheme));
     }

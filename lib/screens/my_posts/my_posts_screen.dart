@@ -189,8 +189,37 @@ class _ListingsList extends StatelessWidget {
               showOwnerActions: true,
               onEdit: () => Navigator.pushNamed(context, AppRoutes.postForm, arguments: listing),
               onDelete: () async {
+                final scheme = Theme.of(context).colorScheme;
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (_) => AlertDialog(
+                    backgroundColor: scheme.surface,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16)),
+                    title: const Text('Delete listing?'),
+                    content: Text(
+                      'Are you sure you want to delete "${listing.title}"? '
+                      'This cannot be undone.',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        style:
+                            TextButton.styleFrom(foregroundColor: scheme.error),
+                        child: const Text('Delete'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed != true || !context.mounted) return;
                 final auth = context.read<AuthProvider>();
-                await context.read<ListingsProvider>().deleteListing(listing.id, auth.user!.uid);
+                await context
+                    .read<ListingsProvider>()
+                    .deleteListing(listing.id, auth.user!.uid);
               },
               onResolve: listing.isResolved
                   ? null

@@ -95,10 +95,13 @@ class NotificationsScreen extends StatelessWidget {
                       return Dismissible(
                         key: Key(doc.id),
                         direction: DismissDirection.endToStart,
-                        onDismissed: (_) => _markAsRead(auth.user!.uid, doc.id),
+                        // Swipe deletes the notification (cleaner than just
+                        // marking it as read — the doc is removed from the
+                        // stream so the Dismissible can safely unmount).
+                        onDismissed: (_) => _delete(auth.user!.uid, doc.id),
                         background: Container(
                           decoration: BoxDecoration(
-                            color: scheme.primary,
+                            color: scheme.error,
                             borderRadius: BorderRadius.circular(14),
                           ),
                           alignment: Alignment.centerRight,
@@ -106,9 +109,14 @@ class NotificationsScreen extends StatelessWidget {
                           child: const Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.done_all_rounded, color: Colors.white, size: 22),
+                              Icon(Icons.delete_outline_rounded,
+                                  color: Colors.white, size: 22),
                               SizedBox(height: 4),
-                              Text('Read', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                              Text('Delete',
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600)),
                             ],
                           ),
                         ),
@@ -218,6 +226,19 @@ class NotificationsScreen extends StatelessWidget {
         .update({'read': true});
   }
 
+  Future<void> _delete(String uid, String notifId) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('notifications')
+          .doc(notifId)
+          .delete();
+    } catch (_) {
+      // ignore — the doc may already be gone
+    }
+  }
+
   Future<void> _markAllAsRead(String uid) async {
     final batch = FirebaseFirestore.instance.batch();
     final unread = await FirebaseFirestore.instance
@@ -250,6 +271,8 @@ class NotificationsScreen extends StatelessWidget {
   IconData _getIcon(String type) {
     switch (type) {
       case 'chat': return Icons.chat_bubble_outline_rounded;
+      case 'comment': return Icons.mode_comment_outlined;
+      case 'mention': return Icons.alternate_email_rounded;
       case 'expiry': return Icons.access_time_rounded;
       default: return Icons.notifications_outlined;
     }
@@ -258,6 +281,8 @@ class NotificationsScreen extends StatelessWidget {
   Color _getIconColor(String type) {
     switch (type) {
       case 'chat': return const Color(0xFF4F46E5);
+      case 'comment': return const Color(0xFF0EA5E9);
+      case 'mention': return const Color(0xFF7C3AED);
       case 'expiry': return Colors.orange;
       default: return Colors.grey;
     }

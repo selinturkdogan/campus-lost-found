@@ -6,4 +6,5 @@ class AppRoutes {
   static const listingDetail = '/listing';
   static const postForm = '/post-form';
   static const myPosts = '/my-posts';
+  static const editProfile = '/edit-profile';
 }

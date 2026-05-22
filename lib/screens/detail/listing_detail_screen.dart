@@ -1,14 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../models/listing_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/listings_provider.dart';
 import '../../utils/app_routes.dart';
 import '../../utils/app_theme.dart';
+import '../../widgets/comments_section.dart';
+import '../../widgets/user_avatar.dart';
 import '../chat/chat_screen.dart';
 
 const Map<String, LatLng> _campusCoords = {
@@ -27,13 +31,68 @@ const Map<String, LatLng> _campusCoords = {
 
 class ListingDetailScreen extends StatefulWidget {
   final ListingModel listing;
-  const ListingDetailScreen({super.key, required this.listing});
+  // If true, the screen scrolls straight down to the comments section
+  // after the first frame is rendered. Used when the user taps the
+  // comment icon on a listing card.
+  final bool scrollToComments;
+
+  const ListingDetailScreen({
+    super.key,
+    required this.listing,
+    this.scrollToComments = false,
+  });
 
   @override
   State<ListingDetailScreen> createState() => _ListingDetailScreenState();
 }
 
 class _ListingDetailScreenState extends State<ListingDetailScreen> {
+  final _scrollCtrl = ScrollController();
+  final _commentsKey = GlobalKey();
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.scrollToComments) {
+      // Wait for the first frame so the comments widget actually has a
+      // position to scroll to.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollToComments();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  void _scrollToComments() {
+    final ctx = _commentsKey.currentContext;
+    if (ctx == null) return;
+    Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 450),
+      curve: Curves.easeOutCubic,
+      alignment: 0.0, // bring the comments to the top of the viewport
+    );
+  }
+  Future<void> _share() async {
+    final isLost = widget.listing.type == 'lost';
+    final intro = isLost
+        ? 'Lost item on campus — help find it!'
+        : 'Found item on campus — looking for the owner!';
+    final url =
+        'https://campus-lost-found-68e7d.web.app/listing/${widget.listing.id}';
+    final msg = '$intro\n\n'
+        '"${widget.listing.title}"\n'
+        '${widget.listing.description}\n'
+        '📍 ${widget.listing.location}\n\n'
+        '$url';
+    await Share.share(msg, subject: widget.listing.title);
+  }
+
   Future<void> _confirmDelete() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -94,6 +153,11 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                 ),
               ),
               actions: [
+                _ActionIconBtn(
+                  icon: Icons.share_outlined,
+                  isDark: isDark,
+                  onTap: _share,
+                ),
                 if (isOwner) ...[
                   _ActionIconBtn(
                     icon: Icons.edit_outlined,
@@ -105,8 +169,8 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                     isDark: isDark,
                     onTap: _confirmDelete,
                   ),
-                  const SizedBox(width: 4),
                 ],
+                const SizedBox(width: 4),
               ],
               flexibleSpace: widget.listing.photoUrl != null
                   ? FlexibleSpaceBar(
@@ -139,16 +203,67 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                         ),
                       ],
                     ),
+                    const SizedBox(height: 12),
+
+                    // Context banner — explains what kind of post this is
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: (isLost
+                                ? const Color(0xFFFF6B6B)
+                                : const Color(0xFF4CAF50))
+                            .withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: (isLost
+                                  ? const Color(0xFFFF6B6B)
+                                  : const Color(0xFF4CAF50))
+                              .withOpacity(0.3),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isLost
+                                ? Icons.search_rounded
+                                : Icons.emoji_objects_outlined,
+                            size: 18,
+                            color: isLost
+                                ? const Color(0xFFFF6B6B)
+                                : const Color(0xFF4CAF50),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              isLost
+                                  ? 'Someone lost this item — help them find it.'
+                                  : 'Someone found this item — is it yours?',
+                              style: textTheme.bodySmall?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: isLost
+                                    ? const Color(0xFFFF6B6B)
+                                    : const Color(0xFF4CAF50),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                     const SizedBox(height: 16),
 
                     Text(widget.listing.title, style: textTheme.displayMedium),
                     const SizedBox(height: 16),
 
                     _InfoRow(icon: Icons.location_on_outlined, label: widget.listing.location),
-                    const SizedBox(height: 8),
-                    _InfoRow(icon: Icons.person_outline_rounded, label: widget.listing.ownerName),
-                    const SizedBox(height: 8),
-                    _InfoRow(icon: Icons.email_outlined, label: widget.listing.ownerEmail),
+                    const SizedBox(height: 16),
+
+                    _PosterCard(
+                      ownerId: widget.listing.ownerId,
+                      fallbackName: widget.listing.ownerName,
+                      fallbackEmail: widget.listing.ownerEmail,
+                    ),
                     const SizedBox(height: 20),
 
                     _LocationMapCard(locationName: widget.listing.location, coords: coords, isDark: isDark),
@@ -169,29 +284,48 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                       _ResolveButton(listingId: widget.listing.id),
                     ],
 
-                    // Non-owner: chat button
+                    // Non-owner: chat button or pickup-info card
                     if (!isOwner && auth.isAuthenticated) ...[
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ChatScreen(
-                                listingId: widget.listing.id,
-                                listingTitle: widget.listing.title,
-                                otherUserId: widget.listing.ownerId,
-                                otherUserName: widget.listing.ownerName,
+                      if (widget.listing.chatEnabled)
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => ChatScreen(
+                                  listingId: widget.listing.id,
+                                  listingTitle: widget.listing.title,
+                                  otherUserId: widget.listing.ownerId,
+                                  otherUserName: widget.listing.ownerName,
+                                ),
                               ),
                             ),
+                            icon: const Icon(
+                                Icons.chat_bubble_outline_rounded,
+                                size: 18),
+                            label: Text(isLost
+                                ? 'I might have it — message owner'
+                                : 'This is mine — message finder'),
                           ),
-                          icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18),
-                          label: const Text('Chat with poster'),
+                        )
+                      else
+                        _ChatDisabledCard(
+                          pickupNote: widget.listing.pickupNote ?? '',
                         ),
-                      ),
                     ] else if (!auth.isAuthenticated) ...[
                       _LoginPrompt(),
                     ],
+
+                    const SizedBox(height: 32),
+                    Divider(color: scheme.outline),
+                    const SizedBox(height: 24),
+
+                    CommentsSection(
+                      key: _commentsKey,
+                      listingId: widget.listing.id,
+                      listingOwnerId: widget.listing.ownerId,
+                    ),
 
                     const SizedBox(height: 40),
                   ],
@@ -408,6 +542,191 @@ class _ResolveButton extends StatelessWidget {
       ),
     ),
   );
+}
+
+class _PosterCard extends StatelessWidget {
+  final String ownerId;
+  final String fallbackName;
+  final String fallbackEmail;
+
+  const _PosterCard({
+    required this.ownerId,
+    required this.fallbackName,
+    required this.fallbackEmail,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    return FutureBuilder<DocumentSnapshot>(
+      future:
+          FirebaseFirestore.instance.collection('users').doc(ownerId).get(),
+      builder: (context, snapshot) {
+        final data = snapshot.hasData && snapshot.data!.exists
+            ? snapshot.data!.data() as Map<String, dynamic>?
+            : null;
+        final photoUrl = data?['photoUrl'] as String?;
+        final name =
+            (data?['displayName'] as String?) ?? fallbackName;
+        final email = (data?['email'] as String?) ?? fallbackEmail;
+        final phone = data?['phone'] as String?;
+        final city = data?['city'] as String?;
+        final department = data?['department'] as String?;
+        final bio = data?['bio'] as String?;
+        final phonePublic = data?['phonePublic'] == true;
+        final cityPublic = data?['cityPublic'] == true;
+
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: scheme.surface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: scheme.outline),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  UserAvatar(
+                    photoUrl: photoUrl,
+                    fallbackName: name,
+                    size: 48,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(name, style: textTheme.titleSmall),
+                        const SizedBox(height: 2),
+                        Text(
+                          email,
+                          style: textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant),
+                        ),
+                        if (department != null && department.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            department,
+                            style: textTheme.bodySmall?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                                fontStyle: FontStyle.italic),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              if (bio != null && bio.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(bio,
+                    style: textTheme.bodySmall?.copyWith(height: 1.4)),
+              ],
+              if ((phonePublic && phone != null && phone.isNotEmpty) ||
+                  (cityPublic && city != null && city.isNotEmpty)) ...[
+                const SizedBox(height: 10),
+                Divider(color: scheme.outline, height: 12),
+                const SizedBox(height: 6),
+                if (phonePublic && phone != null && phone.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      children: [
+                        Icon(Icons.phone_outlined,
+                            size: 14, color: scheme.onSurfaceVariant),
+                        const SizedBox(width: 8),
+                        Text(phone, style: textTheme.bodyMedium),
+                      ],
+                    ),
+                  ),
+                if (cityPublic && city != null && city.isNotEmpty)
+                  Row(
+                    children: [
+                      Icon(Icons.location_city_outlined,
+                          size: 14, color: scheme.onSurfaceVariant),
+                      const SizedBox(width: 8),
+                      Text(city, style: textTheme.bodyMedium),
+                    ],
+                  ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ChatDisabledCard extends StatelessWidget {
+  final String pickupNote;
+
+  const _ChatDisabledCard({required this.pickupNote});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: scheme.surfaceVariant.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: scheme.outline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.chat_bubble_outline_rounded,
+                  size: 18, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 8),
+              Text(
+                'Chat is disabled for this item',
+                style: textTheme.titleSmall?.copyWith(
+                  color: scheme.onSurface,
+                ),
+              ),
+            ],
+          ),
+          if (pickupNote.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: scheme.primary.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: scheme.primary.withOpacity(0.25)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.info_outline_rounded,
+                      size: 18, color: scheme.primary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      pickupNote,
+                      style: textTheme.bodyMedium?.copyWith(
+                        color: scheme.onSurface,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 class _LoginPrompt extends StatelessWidget {

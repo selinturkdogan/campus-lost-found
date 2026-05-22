@@ -10,6 +10,26 @@ const nodemailer = require("nodemailer");
 initializeApp();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Load the list of allowed email domains from Firestore.
+/// Returns an array like ["final.edu.tr", "stu.final.edu.tr"].
+/// If the doc is missing or the list is empty, returns [] — callers must
+/// treat that as "no one is allowed".
+async function loadAllowedDomains(db) {
+  try {
+    const snap = await db.collection("config").doc("allowed_domains").get();
+    if (!snap.exists) return [];
+    const list = snap.data().domains;
+    if (!Array.isArray(list)) return [];
+    return list
+      .map((d) => String(d).toLowerCase().trim())
+      .filter((d) => d.length > 0);
+  } catch (e) {
+    console.error("Failed to load allowed domains:", e);
+    return [];
+  }
+}
+
 function generateTempPassword(length = 12) {
   // Avoid easily-confused chars (0/O, 1/l/I)
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
@@ -118,18 +138,25 @@ exports.sendTempPassword = onCall(
       );
     }
 
-    // 2) Domain check
-    const allowedDomain = (
-      process.env.ALLOWED_EMAIL_DOMAIN || "final.edu.tr"
-    ).toLowerCase();
-    if (!email.endsWith("@" + allowedDomain)) {
+    // 2) Domain check — load whitelist from Firestore (admin-managed)
+    const db = getFirestore();
+    const allowedDomains = await loadAllowedDomains(db);
+    if (allowedDomains.length === 0) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Registration is currently closed. Please contact the administrator."
+      );
+    }
+    const matchesDomain = allowedDomains.some((d) => email.endsWith("@" + d));
+    if (!matchesDomain) {
       throw new HttpsError(
         "permission-denied",
-        `Only @${allowedDomain} email addresses are allowed.`
+        `Only emails from these domains are allowed: ${allowedDomains
+          .map((d) => "@" + d)
+          .join(", ")}`
       );
     }
 
-    const db = getFirestore();
     const auth = getAuth();
 
     // 3) Rate limit: 1 request per 60 seconds per email
@@ -219,18 +246,25 @@ exports.sendPasswordResetMail = onCall(
       throw new HttpsError("invalid-argument", "Email is required.");
     }
 
-    const allowedDomain = (
-      process.env.ALLOWED_EMAIL_DOMAIN || "final.edu.tr"
-    ).toLowerCase();
-    if (!email.endsWith("@" + allowedDomain)) {
+    const db = getFirestore();
+    const allowedDomains = await loadAllowedDomains(db);
+    if (allowedDomains.length === 0) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Password reset is currently disabled. Please contact the administrator."
+      );
+    }
+    const matchesDomain = allowedDomains.some((d) => email.endsWith("@" + d));
+    if (!matchesDomain) {
       throw new HttpsError(
         "permission-denied",
-        `Only @${allowedDomain} email addresses are allowed.`
+        `Only emails from these domains are allowed: ${allowedDomains
+          .map((d) => "@" + d)
+          .join(", ")}`
       );
     }
 
     const auth = getAuth();
-    const db = getFirestore();
 
     // Verify user exists (silently succeed if not, to avoid email enumeration)
     let userRecord;
@@ -289,6 +323,123 @@ exports.sendPasswordResetMail = onCall(
   }
 );
 
+// ── Comment created: bump count + notify owner & mentioned users ─────────────
+exports.onCommentCreated = onDocumentCreated(
+  "listings/{listingId}/comments/{commentId}",
+  async (event) => {
+    const comment = event.data.data();
+    const { listingId } = event.params;
+    const db = getFirestore();
+
+    // 1) Increment commentCount on the listing doc.
+    try {
+      await db.collection("listings").doc(listingId).set(
+        { commentCount: FieldValue.increment(1) },
+        { merge: true }
+      );
+    } catch (e) {
+      console.error("Failed to bump commentCount:", e);
+    }
+
+    const senderId = comment.authorId;
+    const authorName = comment.authorName || "Someone";
+    const previewText = (comment.text || "").slice(0, 120);
+
+    // Fetch the listing once — we need both the owner and the title.
+    let listingTitle = "a listing";
+    let ownerId = null;
+    try {
+      const listingDoc = await db.collection("listings").doc(listingId).get();
+      if (listingDoc.exists) {
+        const ldata = listingDoc.data();
+        listingTitle = ldata.title || listingTitle;
+        ownerId = ldata.ownerId || null;
+      }
+    } catch (_) {}
+
+    // Collect everyone who should be notified, deduped, excluding the
+    // comment author themself.
+    const recipients = new Set();
+
+    // 2a) Listing owner gets a "new comment on your post" notification
+    //     (but skip if they're the one commenting).
+    if (ownerId && ownerId !== senderId) {
+      recipients.add(ownerId);
+    }
+
+    // 2b) Anyone @-mentioned in the comment.
+    const mentions = Array.isArray(comment.mentions) ? comment.mentions : [];
+    for (const m of mentions) {
+      if (m && m !== senderId) recipients.add(m);
+    }
+
+    // 3) Fan out notifications.
+    for (const uid of recipients) {
+      const isOwner = uid === ownerId;
+      const isMention = mentions.includes(uid);
+      // A mention takes priority in the title since it's more personal.
+      const title = isMention
+        ? `${authorName} mentioned you`
+        : `${authorName} commented on your listing`;
+      const body = isMention
+        ? `On "${listingTitle}": ${previewText}`
+        : `"${listingTitle}": ${previewText}`;
+      const type = isMention ? "mention" : "comment";
+
+      // In-app notification doc (powers the bell badge).
+      try {
+        await db
+          .collection("users")
+          .doc(uid)
+          .collection("notifications")
+          .add({
+            title,
+            body,
+            type,
+            listingId,
+            senderId,
+            read: false,
+            createdAt: FieldValue.serverTimestamp(),
+          });
+      } catch (e) {
+        console.error("Failed to write comment notification:", e);
+      }
+
+      // Push notification.
+      try {
+        const userDoc = await db.collection("users").doc(uid).get();
+        const fcmToken = userDoc.exists ? userDoc.data().fcmToken : null;
+        if (fcmToken) {
+          await getMessaging().send({
+            token: fcmToken,
+            notification: { title, body: previewText },
+            data: { listingId, type },
+          });
+        }
+      } catch (e) {
+        console.error("Failed to send comment push:", e);
+      }
+    }
+  }
+);
+
+// ── Comment deleted: decrement count ─────────────────────────────────────────
+exports.onCommentDeleted = require("firebase-functions/v2/firestore").onDocumentDeleted(
+  "listings/{listingId}/comments/{commentId}",
+  async (event) => {
+    const { listingId } = event.params;
+    const db = getFirestore();
+    try {
+      await db.collection("listings").doc(listingId).set(
+        { commentCount: FieldValue.increment(-1) },
+        { merge: true }
+      );
+    } catch (e) {
+      console.error("Failed to decrement commentCount:", e);
+    }
+  }
+);
+
 // ── Send push notification when a new chat message is created ────────────────
 exports.sendChatNotification = onDocumentCreated(
   "listings/{listingId}/chats/{chatId}/messages/{messageId}",
@@ -313,7 +464,20 @@ exports.sendChatNotification = onDocumentCreated(
     if (!receiverId) return;
 
     const listingTitle = chatData.listingTitle || "a listing";
-    const previewBody = message.text || "Sent a photo or location";
+    // Messages are encrypted at rest, so the server can't read the actual
+    // text. Show a generic, content-free preview instead. Images and
+    // location messages are not encrypted, so use a typed label for them.
+    const isEncrypted = message.encrypted === true;
+    let previewBody;
+    if (message.type === "image") {
+      previewBody = "📷 Sent a photo";
+    } else if (message.type === "location") {
+      previewBody = "📍 Shared a location";
+    } else if (isEncrypted) {
+      previewBody = "Sent you a message";
+    } else {
+      previewBody = message.text || "Sent you a message";
+    }
     const notificationTitle = `New message from ${message.senderName}`;
 
     // 1) Increment unread count for the receiver on the chat document.

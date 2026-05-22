@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
+import '../../services/domains_service.dart';
 import '../../utils/app_routes.dart';
 import '../../utils/app_theme.dart';
 
@@ -222,10 +223,12 @@ class _LoginScreenState extends State<LoginScreen>
     final textTheme = Theme.of(context).textTheme;
 
     return Scaffold(
+      // Use the scaffold's own background — keeps the page seamless from
+      // top to bottom and matches the bottom safe-area color (no visible
+      // seam under the bottom text).
       body: Container(
         decoration: BoxDecoration(
           gradient: isDark ? AppTheme.darkBgGradient : null,
-          color: isDark ? null : scheme.surface,
         ),
         child: SafeArea(
           child: SingleChildScrollView(
@@ -237,17 +240,26 @@ class _LoginScreenState extends State<LoginScreen>
                 children: [
                   const SizedBox(height: 56),
 
+                  // Logo + "Campus L&F" wordmark, side by side.
                   _animated(
                     0,
-                    Container(
-                      width: 60,
-                      height: 60,
-                      decoration: BoxDecoration(
-                        gradient: AppTheme.primaryGradient,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: const Icon(Icons.search_rounded,
-                          color: Colors.white, size: 30),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Image.asset(
+                          'assets/logo/png/icon-app-solid-1024.png',
+                          width: 64,
+                          height: 64,
+                        ),
+                        const SizedBox(width: 12),
+                        Text(
+                          'Campus L&F',
+                          style: textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.5,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
 
@@ -258,7 +270,7 @@ class _LoginScreenState extends State<LoginScreen>
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Welcome back', style: textTheme.displayMedium),
+                        Text('Welcome', style: textTheme.displayMedium),
                         const SizedBox(height: 8),
                         Text(
                           'Sign in with your university account to continue.',
@@ -327,29 +339,38 @@ class _LoginScreenState extends State<LoginScreen>
 
                   _animated(
                     3,
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: scheme.surfaceVariant.withOpacity(0.5),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.lock_outline_rounded,
-                              size: 14, color: scheme.onSurfaceVariant),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              'Only @${AuthProvider.allowedDomain} emails',
-                              style: textTheme.bodySmall?.copyWith(
-                                color: scheme.onSurfaceVariant,
-                                fontSize: 11.5,
-                              ),
-                            ),
+                    StreamBuilder<List<String>>(
+                      stream: DomainsService.stream(),
+                      builder: (context, snap) {
+                        final domains = snap.data ?? const [];
+                        final hint = domains.isEmpty
+                            ? 'Sign-up currently closed by admin'
+                            : 'Only ${domains.map((d) => '@$d').join(', ')} emails';
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: scheme.surfaceVariant.withOpacity(0.5),
+                            borderRadius: BorderRadius.circular(10),
                           ),
-                        ],
-                      ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.lock_outline_rounded,
+                                  size: 14, color: scheme.onSurfaceVariant),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  hint,
+                                  style: textTheme.bodySmall?.copyWith(
+                                    color: scheme.onSurfaceVariant,
+                                    fontSize: 11.5,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                     ),
                   ),
 
@@ -447,7 +468,7 @@ class _LoginScreenState extends State<LoginScreen>
           textInputAction: TextInputAction.next,
           style: textTheme.bodyLarge,
           decoration: InputDecoration(
-            hintText: 'name.surname@${AuthProvider.allowedDomain}',
+            hintText: 'name.surname@university.edu',
             prefixIcon: Icon(Icons.email_outlined,
                 size: 20, color: scheme.onSurfaceVariant),
           ),

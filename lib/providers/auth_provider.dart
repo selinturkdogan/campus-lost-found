@@ -2,8 +2,12 @@ import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'dart:io';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import '../services/domains_service.dart';
 import '../services/notification_service.dart';
+import '../utils/image_utils.dart';
 
 class AuthProvider extends ChangeNotifier {
   final _auth = FirebaseAuth.instance;
@@ -11,11 +15,15 @@ class AuthProvider extends ChangeNotifier {
   final _functions = FirebaseFunctions.instance;
   final _googleSignIn = GoogleSignIn(scopes: ['email']);
 
-  // Domain restriction for the Lost & Found app — keep in sync with backend.
-  static const String allowedDomain = 'final.edu.tr';
-
   User? _user;
   String? _displayName;
+  String? _photoUrl;
+  String? _phone;
+  String? _city;
+  String? _department;
+  String? _bio;
+  bool _phonePublic = false;
+  bool _cityPublic = false;
   bool _isAdmin = false;
   bool _isLoading = false;
   bool _mustChangePassword = false;
@@ -29,6 +37,13 @@ class AuthProvider extends ChangeNotifier {
   bool get mustChangePassword => _mustChangePassword;
   String? get errorMessage => _errorMessage;
   String? get infoMessage => _infoMessage;
+  String? get photoUrl => _photoUrl;
+  String? get phone => _phone;
+  String? get city => _city;
+  String? get department => _department;
+  String? get bio => _bio;
+  bool get phonePublic => _phonePublic;
+  bool get cityPublic => _cityPublic;
 
   String get displayName =>
       _displayName ??
@@ -42,6 +57,13 @@ class AuthProvider extends ChangeNotifier {
         await _fetchUserDoc(user.uid);
       } else {
         _displayName = null;
+        _photoUrl = null;
+        _phone = null;
+        _city = null;
+        _department = null;
+        _bio = null;
+        _phonePublic = false;
+        _cityPublic = false;
         _isAdmin = false;
         _mustChangePassword = false;
       }
@@ -93,11 +115,20 @@ class AuthProvider extends ChangeNotifier {
         return false; // user cancelled
       }
 
-      // Domain check on client (UX feedback) — backend re-checks for security
+      // Domain check on client (UX feedback) — backend re-checks for security.
+      // Whitelist is admin-managed in Firestore.
       final email = googleUser.email.toLowerCase();
-      if (!email.endsWith('@$allowedDomain')) {
+      final allowed = await DomainsService.fetch();
+      if (allowed.isEmpty) {
         _errorMessage =
-            'Only @$allowedDomain email addresses are allowed.';
+            'Registration is currently closed. Please contact the administrator.';
+        await _googleSignIn.signOut();
+        return false;
+      }
+      final matches = allowed.any((d) => email.endsWith('@$d'));
+      if (!matches) {
+        _errorMessage =
+            'Only emails from these domains are allowed: ${allowed.map((d) => '@$d').join(', ')}';
         await _googleSignIn.signOut();
         return false;
       }
@@ -220,9 +251,17 @@ class AuthProvider extends ChangeNotifier {
     _clearMessages();
     try {
       final normalized = email.trim().toLowerCase();
-      if (!normalized.endsWith('@$allowedDomain')) {
+      // Client-side hint — backend re-checks against the admin whitelist.
+      final allowed = await DomainsService.fetch();
+      if (allowed.isEmpty) {
         _errorMessage =
-            'Password reset is only available for @$allowedDomain emails.';
+            'Password reset is currently disabled. Please contact the administrator.';
+        return false;
+      }
+      final matches = allowed.any((d) => normalized.endsWith('@$d'));
+      if (!matches) {
+        _errorMessage =
+            'Only emails from these domains are allowed: ${allowed.map((d) => '@$d').join(', ')}';
         return false;
       }
       final callable = _functions.httpsCallable('sendPasswordResetMail');
@@ -268,10 +307,24 @@ class AuthProvider extends ChangeNotifier {
         _displayName = (data['displayName'] as String?) ??
             _user?.displayName ??
             _user?.email?.split('@').first;
+        _photoUrl = data['photoUrl'] as String?;
+        _phone = data['phone'] as String?;
+        _city = data['city'] as String?;
+        _department = data['department'] as String?;
+        _bio = data['bio'] as String?;
+        _phonePublic = data['phonePublic'] == true;
+        _cityPublic = data['cityPublic'] == true;
         _isAdmin = data['isAdmin'] == true;
         _mustChangePassword = data['mustChangePassword'] == true;
       } else {
         _displayName = _user?.displayName ?? _user?.email?.split('@').first;
+        _photoUrl = null;
+        _phone = null;
+        _city = null;
+        _department = null;
+        _bio = null;
+        _phonePublic = false;
+        _cityPublic = false;
         _isAdmin = false;
         _mustChangePassword = false;
         await _firestore.collection('users').doc(uid).set({
@@ -286,8 +339,84 @@ class AuthProvider extends ChangeNotifier {
     } catch (_) {
       _displayName =
           _user?.displayName ?? _user?.email?.split('@').first ?? 'Student';
+      _photoUrl = null;
       _isAdmin = false;
       _mustChangePassword = false;
+    }
+  }
+
+  /// Update profile fields. Pass only the fields you want to change.
+  /// To upload a new photo, pass [newPhotoFile]. To remove the existing
+  /// photo, pass [removePhoto] = true.
+  Future<bool> updateProfile({
+    String? displayName,
+    String? phone,
+    String? city,
+    String? department,
+    String? bio,
+    bool? phonePublic,
+    bool? cityPublic,
+    File? newPhotoFile,
+    bool removePhoto = false,
+  }) async {
+    final uid = _user?.uid;
+    if (uid == null) {
+      _errorMessage = 'You must be signed in.';
+      notifyListeners();
+      return false;
+    }
+    _setLoading(true);
+    _clearMessages();
+    try {
+      String? newPhotoUrl = _photoUrl;
+
+      if (removePhoto) {
+        newPhotoUrl = null;
+        try {
+          await FirebaseStorage.instance
+              .ref('profile_images/$uid.jpg')
+              .delete();
+        } catch (_) {
+          // Photo may not exist — ignore.
+        }
+      } else if (newPhotoFile != null) {
+        final compressed = await ImageUtils.compress(
+          newPhotoFile,
+          maxWidth: 720,
+          quality: 85,
+        );
+        final ref = FirebaseStorage.instance.ref('profile_images/$uid.jpg');
+        await ref.putFile(compressed);
+        newPhotoUrl = await ref.getDownloadURL();
+      }
+
+      final updates = <String, dynamic>{
+        if (displayName != null) 'displayName': displayName.trim(),
+        if (phone != null) 'phone': phone.trim().isEmpty ? null : phone.trim(),
+        if (city != null) 'city': city.trim().isEmpty ? null : city.trim(),
+        if (department != null)
+          'department': department.trim().isEmpty ? null : department.trim(),
+        if (bio != null) 'bio': bio.trim().isEmpty ? null : bio.trim(),
+        if (phonePublic != null) 'phonePublic': phonePublic,
+        if (cityPublic != null) 'cityPublic': cityPublic,
+        if (newPhotoFile != null || removePhoto) 'photoUrl': newPhotoUrl,
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+
+      await _firestore.collection('users').doc(uid).set(
+            updates,
+            SetOptions(merge: true),
+          );
+
+      await _fetchUserDoc(uid);
+      _infoMessage = 'Profile updated.';
+      notifyListeners();
+      return true;
+    } catch (_) {
+      _errorMessage = 'Failed to update profile. Please try again.';
+      return false;
+    } finally {
+      _setLoading(false);
     }
   }
 
@@ -332,7 +461,7 @@ class AuthProvider extends ChangeNotifier {
   String _parseFunctionError(String code) {
     switch (code) {
       case 'permission-denied':
-        return 'Only @$allowedDomain emails are allowed.';
+        return 'Your email domain is not allowed.';
       case 'unauthenticated':
         return 'Google verification failed.';
       case 'resource-exhausted':

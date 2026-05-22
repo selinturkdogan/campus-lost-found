@@ -44,6 +44,15 @@ class ListingModel extends HiveObject {
   @HiveField(12)
   final String? category;
 
+  @HiveField(13)
+  final bool chatEnabled;
+
+  @HiveField(14)
+  final String? pickupNote;
+
+  @HiveField(15)
+  final int commentCount;
+
   ListingModel({
     required this.id,
     required this.title,
@@ -58,6 +67,9 @@ class ListingModel extends HiveObject {
     required this.createdAt,
     this.updatedAt,
     this.category,
+    this.chatEnabled = true,
+    this.pickupNote,
+    this.commentCount = 0,
   });
 
   factory ListingModel.fromFirestore(DocumentSnapshot doc) {
@@ -76,6 +88,10 @@ class ListingModel extends HiveObject {
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       updatedAt: (data['updatedAt'] as Timestamp?)?.toDate(),
       category: data['category'],
+      // Default to chat enabled for legacy listings without the field.
+      chatEnabled: data['chatEnabled'] ?? true,
+      pickupNote: data['pickupNote'],
+      commentCount: (data['commentCount'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -104,6 +120,8 @@ class ListingModel extends HiveObject {
     String? photoUrl,
     bool? isResolved,
     String? category,
+    bool? chatEnabled,
+    String? pickupNote,
   }) {
     return ListingModel(
       id: id,
@@ -119,6 +137,8 @@ class ListingModel extends HiveObject {
       createdAt: createdAt,
       updatedAt: DateTime.now(),
       category: category ?? this.category,
+      chatEnabled: chatEnabled ?? this.chatEnabled,
+      pickupNote: pickupNote ?? this.pickupNote,
     );
   }
 }

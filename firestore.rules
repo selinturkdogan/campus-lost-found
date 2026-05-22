@@ -1,0 +1,134 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: is the requesting user an admin? (users/{uid}.isAdmin == true)
+    function isAdmin() {
+      return request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    function isSelf(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    // ── Collection-group rule: chats across all listings ─────────────────
+    // The profile screen's "Messages" tile runs a collectionGroup('chats')
+    // query filtered by participants. Without this rule the query is
+    // denied even though the per-listing rule allows it.
+    match /{path=**}/chats/{chatId} {
+      allow read: if request.auth != null &&
+        request.auth.uid in resource.data.participants;
+    }
+
+    // ── Listings ───────────────────────────────────────────────────────────
+    match /listings/{listingId} {
+      allow read: if true;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null &&
+        (resource.data.ownerId == request.auth.uid || isAdmin());
+
+      // Nested chats + messages — participants only.
+      // Even though message bodies are encrypted client-side, we still
+      // restrict access here so that nobody can list chats they're not
+      // in, inject fake messages, or delete other people's threads.
+      match /chats/{chatId} {
+        function isParticipant() {
+          return request.auth != null &&
+            request.auth.uid in resource.data.participants;
+        }
+        function willBeParticipant() {
+          return request.auth != null &&
+            request.auth.uid in request.resource.data.participants;
+        }
+
+        allow read: if isParticipant();
+        // Creating a new chat: the writer must include themself in the
+        // participants list.
+        allow create: if willBeParticipant();
+        // Updating an existing chat (e.g. lastMessage, unreadCounts,
+        // deletedFor): must already be a participant.
+        allow update: if isParticipant();
+        // Hard-delete of a chat thread is disabled — users soft-delete
+        // by adding themselves to `deletedFor` (so the other participant
+        // still sees the conversation).
+        allow delete: if false;
+
+        match /messages/{messageId} {
+          // To read/write messages you must be a participant of the
+          // parent chat doc.
+          function isChatParticipant() {
+            return request.auth != null &&
+              request.auth.uid in
+                get(/databases/$(database)/documents/listings/$(listingId)/chats/$(chatId))
+                  .data.participants;
+          }
+
+          allow read: if isChatParticipant();
+          // The sender field must match the caller — prevents spoofing.
+          allow create: if isChatParticipant() &&
+            request.resource.data.senderId == request.auth.uid;
+          // Only the sender can delete their own message (e.g. typo).
+          // Deleting a whole conversation is a per-user soft-delete on
+          // the chat doc (deletedFor field) — it does NOT wipe messages.
+          allow delete: if request.auth != null &&
+            resource.data.senderId == request.auth.uid;
+          // Messages are immutable once sent.
+          allow update: if false;
+        }
+      }
+
+      // Nested comments under a listing.
+      match /comments/{commentId} {
+        // Anyone signed in can read comments (they're public discussion).
+        allow read: if request.auth != null;
+        // Anyone signed in can post a comment, but they must set themselves
+        // as the author.
+        allow create: if request.auth != null &&
+          request.resource.data.authorId == request.auth.uid;
+        // A comment can be deleted by the author, the listing owner, or
+        // an admin.
+        allow delete: if request.auth != null && (
+          resource.data.authorId == request.auth.uid ||
+          get(/databases/$(database)/documents/listings/$(listingId)).data.ownerId == request.auth.uid ||
+          isAdmin()
+        );
+        // No edits — comments are immutable.
+        allow update: if false;
+      }
+    }
+
+    // ── Users ──────────────────────────────────────────────────────────────
+    match /users/{uid} {
+      // Anyone signed in can read user profiles (for avatars + poster cards).
+      allow read: if request.auth != null;
+      // Only the user themself can update their profile.
+      // Admins can also update (for moderation).
+      allow write: if isSelf(uid) || isAdmin();
+
+      // Nested notifications — only the owner can read/write theirs.
+      match /notifications/{notifId} {
+        allow read, write: if isSelf(uid);
+      }
+    }
+
+    // ── Config (allowed_domains etc.) ─────────────────────────────────────
+    // Anyone signed in can READ (so login screen can show the hint),
+    // but only ADMINS can WRITE.
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ── Top-level notifications queue ─────────────────────────────────────
+    // Used as a write-only outbox. The client appends a notification
+    // request here when a new listing is posted or a chat message is sent;
+    // a Cloud Function (admin SDK, bypasses rules) is expected to read and
+    // fan out push notifications. We never let clients read or delete from
+    // this queue — only create.
+    match /notifications/{notifId} {
+      allow create: if request.auth != null;
+      allow read, update, delete: if false;
+    }
+  }
+}

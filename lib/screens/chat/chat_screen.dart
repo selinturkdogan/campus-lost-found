@@ -9,7 +9,10 @@ import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../providers/auth_provider.dart';
+import '../../services/message_crypto.dart';
 import '../../services/notification_service.dart';
+import '../../utils/image_utils.dart';
+import '../../widgets/user_avatar.dart';
 
 class ChatScreen extends StatefulWidget {
   final String listingId;
@@ -48,6 +51,13 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Reset this user's unread counter on the chat doc.
   /// Called once when the chat screen is opened so the messages list /
   /// profile badge clear immediately.
+  ///
+  /// Uses `update()` (not `set` with merge) so that we don't accidentally
+  /// CREATE a chat doc when the user just visits an empty conversation.
+  /// With the strict participants-only rules, creating a chat doc
+  /// requires the `participants` array — which we don't have here.
+  /// If the doc doesn't exist yet, update() throws and we silently skip,
+  /// which is correct: there's nothing to mark as read anyway.
   Future<void> _markChatAsRead(String chatId, String myUid) async {
     if (_didMarkRead) return;
     _didMarkRead = true;
@@ -57,14 +67,10 @@ class _ChatScreenState extends State<ChatScreen> {
           .doc(widget.listingId)
           .collection('chats')
           .doc(chatId)
-          .set(
-        {
-          'unreadCounts': {myUid: 0},
-        },
-        SetOptions(merge: true),
-      );
+          .update({'unreadCounts.$myUid': 0});
     } catch (_) {
-      // Non-fatal — user can keep chatting.
+      // Non-fatal: chat doc may not exist yet, or the user isn't a
+      // participant. Either way, no unread counter to reset.
     }
   }
 
@@ -90,54 +96,77 @@ class _ChatScreenState extends State<ChatScreen> {
         'createdAt': FieldValue.serverTimestamp(),
       };
 
+      // Encrypt the text field (and the lastMessage preview) before it
+      // ever hits Firestore. Image URLs and lat/lng stay in clear since
+      // image bytes are public in Storage anyway.
       if (imageUrl != null) {
         msgData['imageUrl'] = imageUrl;
         msgData['type'] = 'image';
+        msgData['encrypted'] = false;
       } else if (lat != null && lng != null) {
         msgData['lat'] = lat;
         msgData['lng'] = lng;
         msgData['type'] = 'location';
-        msgData['text'] = 'Shared a location';
+        msgData['text'] = MessageCrypto.encryptText('Shared a location');
+        msgData['encrypted'] = true;
       } else {
-        msgData['text'] = msgText;
+        msgData['text'] = MessageCrypto.encryptText(msgText);
         msgData['type'] = 'text';
+        msgData['encrypted'] = true;
       }
 
-      await FirebaseFirestore.instance
-          .collection('listings')
-          .doc(widget.listingId)
-          .collection('chats')
-          .doc(chatId)
-          .collection('messages')
-          .add(msgData);
-
+      // Build the last-message preview. Photo/location stay as clear
+      // emoji strings (they're not sensitive). Text previews are
+      // encrypted so the messages list also doesn't leak content.
       final lastMsg = imageUrl != null
           ? '📷 Photo'
           : lat != null
               ? '📍 Location'
-              : msgText;
+              : MessageCrypto.encryptText(msgText);
+      final lastMsgEncrypted = imageUrl == null && lat == null;
 
-      await FirebaseFirestore.instance
+      final chatRef = FirebaseFirestore.instance
           .collection('listings')
           .doc(widget.listingId)
           .collection('chats')
-          .doc(chatId)
-          .set({
+          .doc(chatId);
+
+      // IMPORTANT: Write the chat doc FIRST so its `participants` array
+      // exists before any message is added. The Firestore security rules
+      // require the caller to be a participant of the chat to write
+      // messages — if we add the message before the chat doc exists,
+      // the get() inside the rules sees no participants array and the
+      // write is denied with PERMISSION_DENIED.
+      await chatRef.set({
         'participants': [auth.user!.uid, widget.otherUserId],
         'participantNames': {
           auth.user!.uid: auth.displayName,
           widget.otherUserId: widget.otherUserName,
         },
         'lastMessage': lastMsg,
+        'lastMessageEncrypted': lastMsgEncrypted,
         'lastMessageAt': FieldValue.serverTimestamp(),
         'listingTitle': widget.listingTitle,
+        // Reset soft-delete for everyone — a new message should bring
+        // the conversation back into both participants' lists, even if
+        // one of them had hidden it earlier.
+        'deletedFor': <String>[],
       }, SetOptions(merge: true));
 
-      await NotificationService.sendContactNotification(
+      await chatRef.collection('messages').add(msgData);
+
+      // Fire the contact notification in the background — don't block
+      // the UI on it. The push notification is also sent by the
+      // sendChatNotification Cloud Function trigger, so this client-side
+      // call is just a best-effort backup.
+      // ignore: discarded_futures
+      NotificationService.sendContactNotification(
         posterUid: widget.otherUserId,
         senderName: auth.displayName,
         listingTitle: widget.listingTitle,
-      );
+      ).catchError((_) {
+        // Non-fatal — Cloud Function still sends the push.
+      });
 
       Future.delayed(const Duration(milliseconds: 100), () {
         if (_scrollCtrl.hasClients) {
@@ -160,10 +189,17 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _pickImage(ImageSource source) async {
     final picker = ImagePicker();
-    final picked = await picker.pickImage(source: source, imageQuality: 70);
+    final picked = await picker.pickImage(
+      source: source,
+      maxWidth: 1920,
+      maxHeight: 1920,
+    );
     if (picked == null) return;
+    // Compress before previewing so the user sees the final size accurately
+    // and the upload is small.
+    final compressed = await ImageUtils.compress(File(picked.path));
     setState(() {
-      _pendingImage = File(picked.path);
+      _pendingImage = compressed;
       _pendingLat = null;
       _pendingLng = null;
     });
@@ -343,18 +379,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  Container(
-                    width: 36, height: 36,
-                    decoration: BoxDecoration(
-                      color: scheme.primary.withOpacity(0.15),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Center(
-                      child: Text(
-                        widget.otherUserName[0].toUpperCase(),
-                        style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 14),
-                      ),
-                    ),
+                  UserAvatar(
+                    uid: widget.otherUserId,
+                    fallbackName: widget.otherUserName,
+                    size: 36,
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -424,9 +452,17 @@ class _ChatScreenState extends State<ChatScreen> {
                       final createdAt = (data['createdAt'] as Timestamp?)?.toDate();
                       final type = data['type'] ?? 'text';
 
+                      // Decrypt the text. Falls back to the raw value for
+                      // messages written before encryption shipped.
+                      final rawText = (data['text'] as String?) ?? '';
+                      final isEncrypted = data['encrypted'] == true;
+                      final decryptedText = isEncrypted
+                          ? MessageCrypto.decryptOrPassthrough(rawText)
+                          : rawText;
+
                       return _MessageBubble(
                         type: type,
-                        text: data['text'] ?? '',
+                        text: decryptedText,
                         imageUrl: data['imageUrl'],
                         lat: data['lat']?.toDouble(),
                         lng: data['lng']?.toDouble(),
@@ -568,7 +604,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   const SizedBox(width: 8),
                   GestureDetector(
-                    onTap: _sending ? null : () => _sendMessage(text: _messageCtrl.text.trim()),
+                    // Don't pass `text:` — that disables the auto-clear
+                    // logic inside _sendMessage. Letting it pull from
+                    // _messageCtrl directly means the field is cleared
+                    // after the send.
+                    onTap: _sending ? null : () => _sendMessage(),
                     child: Container(
                       width: 44, height: 44,
                       decoration: BoxDecoration(
