@@ -151,12 +151,7 @@ audience.
    │      ▼            ▼        │
    │    FCM        Gmail SMTP   │
    └────────────────────────────┘
-```
 
-Full architecture, storage management, and implementation details are
-documented in `TechnicalDoc_CampusLF.docx` (see [Documentation](#documentation)).
-
----
 
 ## Project structure
 
