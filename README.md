@@ -317,17 +317,6 @@ collection-group index on `chats.participants`, which is declared in
 
 ---
 
-## Documentation
-
-Two additional documents accompany the project submission:
-
-| File | Contents |
-|---|---|
-| `SRS_CampusLF_Final.docx` | Software Requirements Specification (v2). Updated to reflect the final delivered system. |
-| `TechnicalDoc_CampusLF.docx` | System architecture, implementation process, storage management, and other technical details. |
-
----
-
 ## Author
 
 **Selin Türkdoğan** 
