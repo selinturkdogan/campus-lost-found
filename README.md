@@ -3,16 +3,6 @@
 A Flutter mobile application that lets university students report and recover
 lost items on campus. 
 
-## Table of Contents
-
-- [About](#about)
-- [Features](#features)
-- [Tech stack](#tech-stack)
-- [Architecture at a glance](#architecture-at-a-glance)
-- [Project structure](#project-structure)
-- [How to run](#how-to-run)
-- [Deploying the backend](#deploying-the-backend)
-
 ---
 
 ## About
