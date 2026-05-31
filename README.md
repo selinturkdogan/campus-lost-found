@@ -151,7 +151,9 @@ audience.
    │      ▼            ▼        │
    │    FCM        Gmail SMTP   │
    └────────────────────────────┘
+```
 
+---
 
 ## Project structure
 
