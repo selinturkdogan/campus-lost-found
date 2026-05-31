@@ -1,14 +1,7 @@
 # Campus L&F (Lost & Found Board)
 
 A Flutter mobile application that lets university students report and recover
-lost items on campus. Built as the final project for the **P08 — Mobile
-Application Development** course.
-
-> **Status:** Final submission (v2). All originally proposed features are
-> delivered, plus a substantial set of post-Week-5 enhancements including
-> encrypted chat, admin-managed access control, and a custom logo.
-
----
+lost items on campus. 
 
 ## Table of Contents
 
@@ -337,5 +330,4 @@ Two additional documents accompany the project submission:
 
 ## Author
 
-**Selin Türkdoğan** — Student ID 2103060004
-P08 — Mobile Application Development (Flutter)
+**Selin Türkdoğan** 
