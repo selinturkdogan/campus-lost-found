@@ -45,7 +45,7 @@ audience.
 
 ### Feed and listings
 - Two-tab feed (Lost / Found) with explanatory subtitles.
-- Pagination — ten listings at a time with an explicit **Load more** action.
+- Pagination ten listings at a time with an explicit **Load more** action.
 - Pull-to-refresh on every tab.
 - Keyword search and filtering by campus location and category.
 - Instagram-style listing cards: header (avatar + name + meta), 16:9 photo
@@ -58,7 +58,7 @@ audience.
 
 ### Detail screen
 - Full description, photo, category badge, and metadata.
-- **Google Maps preview** — tap the map to open the device's native Google
+- **Google Maps preview** tap the map to open the device's native Google
   Maps application.
 - Poster card with avatar, email, optional phone/city/department/bio
   (controlled by privacy toggles on the user side).
@@ -72,7 +72,7 @@ audience.
   written to Firestore (per-message random IV).
 - Text messages, image messages, and location messages are all supported.
 - Per-chat unread counters maintained by a Cloud Function.
-- **Soft delete** — hiding a conversation only affects your own view; a new
+- **Soft delete** hiding a conversation only affects your own view; a new
   message brings it back for both participants.
 - Push notifications use a generic body (no message content leaks server-side
   because the server cannot decrypt it).
@@ -100,7 +100,7 @@ audience.
 
 ### Other polish
 - Image compression pipeline (1280 px / JPEG q85) shared by listing photos,
-  chat photos, and avatars — typically reduces a 3-5 MB photo to
+  chat photos, and avatars typically reduces a 3-5 MB photo to
   ~200-400 KB without visible loss.
 - Offline cache of recent listings via Hive, with an offline banner.
 - Light and dark themes.
@@ -216,7 +216,7 @@ campus_lf_new/
 ### Prerequisites
 
 - Flutter SDK 3.0+
-- A Firebase project on the Blaze (pay-as-you-go) plan — required for Cloud
+- A Firebase project on the Blaze (pay-as-you-go) plan required for Cloud
   Functions outbound network access (Gmail SMTP) and any usage above the
   free tier.
 - A Google account with 2-Step Verification enabled (needed to issue an
