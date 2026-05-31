@@ -12,7 +12,6 @@ lost items on campus.
 - [Project structure](#project-structure)
 - [How to run](#how-to-run)
 - [Deploying the backend](#deploying-the-backend)
-- [Documentation](#documentation)
 
 ---
 
