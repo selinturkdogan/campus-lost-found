@@ -3,12 +3,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-// google_maps_flutter is kept only for its LatLng type (used by the
-// `_campusCoords` lookup) — Marker is hidden so it doesn't collide with
-// flutter_map's Marker, which is what we now use for the preview.
-import 'package:google_maps_flutter/google_maps_flutter.dart' hide Marker;
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart' as ll;
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../models/listing_model.dart';
@@ -21,21 +16,24 @@ import '../../widgets/delete_reason_sheet.dart';
 import '../../widgets/user_avatar.dart';
 import '../chat/chat_screen.dart';
 
-// Approximate coordinates for Final International University — Çatalköy /
-// Kyrenia campus (Northern Cyprus). Each entry is offset slightly around
-// the main campus point so that different listings render distinct pins.
+// Final International University — Ozanköy / Girne campus,
+// Northern Cyprus. Exact coordinates picked from Google Maps by
+// long-pressing the campus entrance. Every location maps to this
+// same point so the pin always lands precisely on FIU.
+const LatLng _fiuMain = LatLng(35.33009435200998, 33.361380613281945);
+
 const Map<String, LatLng> _campusCoords = {
-  'Main Library':         LatLng(35.3470, 33.3142),
-  'Student Union':        LatLng(35.3472, 33.3145),
-  'Engineering Building': LatLng(35.3475, 33.3148),
-  'Science Hall':         LatLng(35.3468, 33.3140),
-  'Arts Center':          LatLng(35.3466, 33.3144),
-  'Dining Hall':          LatLng(35.3471, 33.3146),
-  'Gym & Recreation':     LatLng(35.3464, 33.3150),
-  'Residence Halls':      LatLng(35.3478, 33.3152),
-  'Parking Lots':         LatLng(35.3473, 33.3138),
-  'Campus Grounds':       LatLng(35.3470, 33.3145),
-  'Other':                LatLng(35.3470, 33.3145),
+  'Main Library':         _fiuMain,
+  'Student Union':        _fiuMain,
+  'Engineering Building': _fiuMain,
+  'Science Hall':         _fiuMain,
+  'Arts Center':          _fiuMain,
+  'Dining Hall':          _fiuMain,
+  'Gym & Recreation':     _fiuMain,
+  'Residence Halls':      _fiuMain,
+  'Parking Lots':         _fiuMain,
+  'Campus Grounds':       _fiuMain,
+  'Other':                _fiuMain,
 };
 
 class ListingDetailScreen extends StatefulWidget {
@@ -142,7 +140,8 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
     final isOwner = auth.user?.uid == widget.listing.ownerId;
     final isLost = widget.listing.type == 'lost';
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final coords = _campusCoords[widget.listing.location] ?? const LatLng(35.3301, 33.3588);
+    // Every campus location resolves to the same FIU coordinate.
+    final coords = _campusCoords[widget.listing.location] ?? _fiuMain;
 
     return Scaffold(
       body: Container(
@@ -452,48 +451,29 @@ class _LocationMapCardState extends State<_LocationMapCard> {
                 border: Border.all(color: scheme.outline.withOpacity(0.4)),
                 borderRadius: BorderRadius.circular(16),
               ),
-              // Render the preview with flutter_map + OpenStreetMap
-              // tiles. OSM covers Northern Cyprus properly (Google's
-              // tile data is patchy here) and needs no API key. The
-              // widget is wrapped in IgnorePointer so the parent
-              // GestureDetector still gets the tap → Open in Maps.
+              // Native Google Maps preview (lite mode). Wrapped in
+              // IgnorePointer so taps fall through to the parent
+              // GestureDetector → opens the full Google Maps app.
               child: Stack(
                 children: [
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: FlutterMap(
-                        options: MapOptions(
-                          initialCenter: ll.LatLng(
-                              widget.coords.latitude, widget.coords.longitude),
-                          initialZoom: 16,
-                          interactionOptions: const InteractionOptions(
-                            flags: InteractiveFlag.none,
-                          ),
-                        ),
-                        children: [
-                          TileLayer(
-                            urlTemplate:
-                                'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                            userAgentPackageName:
-                                'com.example.campus_lf_new',
-                          ),
-                          MarkerLayer(
-                            markers: [
-                              Marker(
-                                point: ll.LatLng(widget.coords.latitude,
-                                    widget.coords.longitude),
-                                width: 40,
-                                height: 40,
-                                child: const Icon(
-                                  Icons.location_on,
-                                  color: Colors.red,
-                                  size: 36,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
+                  IgnorePointer(
+                    child: GoogleMap(
+                      initialCameraPosition: CameraPosition(
+                        target: widget.coords,
+                        zoom: 17,
                       ),
+                      markers: {
+                        Marker(
+                          markerId: const MarkerId('listing_location'),
+                          position: widget.coords,
+                          infoWindow:
+                              InfoWindow(title: widget.locationName),
+                        ),
+                      },
+                      myLocationButtonEnabled: false,
+                      zoomControlsEnabled: false,
+                      mapToolbarEnabled: false,
+                      liteModeEnabled: true,
                     ),
                   ),
                   // Hint overlay so users know the map is tappable
