@@ -24,6 +24,7 @@ class AuthProvider extends ChangeNotifier {
   String? _bio;
   bool _phonePublic = false;
   bool _cityPublic = false;
+  List<String> _blockedUsers = const [];
   bool _isAdmin = false;
   bool _isLoading = false;
   bool _mustChangePassword = false;
@@ -44,6 +45,10 @@ class AuthProvider extends ChangeNotifier {
   String? get bio => _bio;
   bool get phonePublic => _phonePublic;
   bool get cityPublic => _cityPublic;
+  List<String> get blockedUsers => List.unmodifiable(_blockedUsers);
+
+  /// Returns true if the current user has blocked [otherUid].
+  bool isBlocked(String otherUid) => _blockedUsers.contains(otherUid);
 
   String get displayName =>
       _displayName ??
@@ -64,6 +69,7 @@ class AuthProvider extends ChangeNotifier {
         _bio = null;
         _phonePublic = false;
         _cityPublic = false;
+        _blockedUsers = const [];
         _isAdmin = false;
         _mustChangePassword = false;
       }
@@ -314,6 +320,8 @@ class AuthProvider extends ChangeNotifier {
         _bio = data['bio'] as String?;
         _phonePublic = data['phonePublic'] == true;
         _cityPublic = data['cityPublic'] == true;
+        _blockedUsers =
+            List<String>.from(data['blockedUsers'] ?? const <String>[]);
         _isAdmin = data['isAdmin'] == true;
         _mustChangePassword = data['mustChangePassword'] == true;
       } else {
@@ -325,6 +333,7 @@ class AuthProvider extends ChangeNotifier {
         _bio = null;
         _phonePublic = false;
         _cityPublic = false;
+        _blockedUsers = const [];
         _isAdmin = false;
         _mustChangePassword = false;
         await _firestore.collection('users').doc(uid).set({
@@ -340,8 +349,41 @@ class AuthProvider extends ChangeNotifier {
       _displayName =
           _user?.displayName ?? _user?.email?.split('@').first ?? 'Student';
       _photoUrl = null;
+      _blockedUsers = const [];
       _isAdmin = false;
       _mustChangePassword = false;
+    }
+  }
+
+  // ─── Block / Unblock another user ──────────────────────────────────────
+  Future<bool> blockUser(String otherUid) async {
+    final uid = _user?.uid;
+    if (uid == null || uid == otherUid) return false;
+    try {
+      await _firestore.collection('users').doc(uid).set({
+        'blockedUsers': FieldValue.arrayUnion([otherUid]),
+      }, SetOptions(merge: true));
+      _blockedUsers = [..._blockedUsers, otherUid];
+      notifyListeners();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> unblockUser(String otherUid) async {
+    final uid = _user?.uid;
+    if (uid == null) return false;
+    try {
+      await _firestore.collection('users').doc(uid).set({
+        'blockedUsers': FieldValue.arrayRemove([otherUid]),
+      }, SetOptions(merge: true));
+      _blockedUsers =
+          _blockedUsers.where((id) => id != otherUid).toList(growable: false);
+      notifyListeners();
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 

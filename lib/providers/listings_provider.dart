@@ -325,8 +325,33 @@ class ListingsProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> deleteListing(String listingId, String ownerId) async {
+  /// Hard-delete a listing. [reason] is logged on the listing doc first
+  /// (and copied into the archive collection) so admins/analytics can see
+  /// why the owner removed it — e.g. "mistake", "no_longer_needed", "other".
+  /// [reasonText] is the optional free-text the user typed for "other".
+  Future<bool> deleteListing(
+    String listingId,
+    String ownerId, {
+    String reason = 'unspecified',
+    String? reasonText,
+  }) async {
     try {
+      // Snapshot the listing into an archive before destroying it. Useful
+      // for the admin panel and presentations: "here's why people delete".
+      try {
+        final snap = await _firestore.collection('listings').doc(listingId).get();
+        if (snap.exists) {
+          await _firestore.collection('deletedListings').doc(listingId).set({
+            ...?snap.data(),
+            'deletedAt': FieldValue.serverTimestamp(),
+            'deleteReason': reason,
+            if (reasonText != null && reasonText.trim().isNotEmpty)
+              'deleteReasonText': reasonText.trim(),
+          });
+        }
+      } catch (_) {
+        // Archive failure is non-fatal — proceed with the delete.
+      }
       try {
         await _storage.ref('listing_images/$ownerId/$listingId.jpg').delete();
       } catch (_) {}
@@ -340,10 +365,15 @@ class ListingsProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> markResolved(String listingId) async {
+  /// Mark a listing as resolved. When the user resolves because the item
+  /// was actually found/returned, we record that via [reason] = "found".
+  /// Manual resolves from the action button just pass the default.
+  Future<bool> markResolved(String listingId, {String reason = 'resolved'}) async {
     try {
       await _firestore.collection('listings').doc(listingId).update({
         'isResolved': true,
+        'resolveReason': reason,
+        'resolvedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
       await refreshAll();

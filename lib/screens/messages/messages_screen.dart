@@ -103,14 +103,25 @@ class _AllChatsView extends StatelessWidget {
         if (!chatSnap.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
-        // Filter out chats this user has soft-deleted. Firestore can't
-        // combine arrayContains (participants) with array-not-contains
-        // in a single query, so we filter on the client.
+        // Filter out chats this user has soft-deleted, and chats with
+        // users this user has blocked. Firestore can't combine
+        // arrayContains (participants) with multiple array-not-contains
+        // in one query, so we filter on the client.
+        final auth = context.read<AuthProvider>();
+        final blocked = auth.blockedUsers;
         final chats = chatSnap.data!.docs.where((doc) {
           final data = doc.data() as Map<String, dynamic>;
           final deletedFor =
               List<String>.from(data['deletedFor'] ?? const []);
-          return !deletedFor.contains(uid);
+          if (deletedFor.contains(uid)) return false;
+          final participants =
+              List<String>.from(data['participants'] ?? const []);
+          final otherUid = participants.firstWhere(
+            (id) => id != uid,
+            orElse: () => '',
+          );
+          if (blocked.contains(otherUid)) return false;
+          return true;
         }).toList()
           ..sort((a, b) {
             final aTs = (a.data() as Map<String, dynamic>)['lastMessageAt']

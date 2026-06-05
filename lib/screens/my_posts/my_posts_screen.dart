@@ -5,6 +5,7 @@ import '../../models/listing_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/listings_provider.dart';
 import '../../utils/app_routes.dart';
+import '../../widgets/delete_reason_sheet.dart';
 import '../../widgets/listing_card.dart';
 
 class MyPostsScreen extends StatefulWidget {
@@ -189,37 +190,39 @@ class _ListingsList extends StatelessWidget {
               showOwnerActions: true,
               onEdit: () => Navigator.pushNamed(context, AppRoutes.postForm, arguments: listing),
               onDelete: () async {
-                final scheme = Theme.of(context).colorScheme;
-                final confirmed = await showDialog<bool>(
-                  context: context,
-                  builder: (_) => AlertDialog(
-                    backgroundColor: scheme.surface,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16)),
-                    title: const Text('Delete listing?'),
-                    content: Text(
-                      'Are you sure you want to delete "${listing.title}"? '
-                      'This cannot be undone.',
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, false),
-                        child: const Text('Cancel'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, true),
-                        style:
-                            TextButton.styleFrom(foregroundColor: scheme.error),
-                        child: const Text('Delete'),
-                      ),
-                    ],
-                  ),
+                // Ask why the user is removing the listing. "Found /
+                // returned" maps to a soft-resolve so we keep the history;
+                // everything else is a real delete with the reason logged.
+                final result = await showDeleteReasonSheet(
+                  context,
+                  listingTitle: listing.title,
                 );
-                if (confirmed != true || !context.mounted) return;
+                if (result == null || !context.mounted) return;
                 final auth = context.read<AuthProvider>();
-                await context
-                    .read<ListingsProvider>()
-                    .deleteListing(listing.id, auth.user!.uid);
+                final provider = context.read<ListingsProvider>();
+                final messenger = ScaffoldMessenger.of(context);
+
+                if (result.action == DeleteReasonAction.resolve) {
+                  final ok = await provider.markResolved(listing.id,
+                      reason: result.reason);
+                  if (ok) {
+                    messenger.showSnackBar(const SnackBar(
+                      content: Text('Marked as resolved — great news! 🎉'),
+                    ));
+                  }
+                } else {
+                  final ok = await provider.deleteListing(
+                    listing.id,
+                    auth.user!.uid,
+                    reason: result.reason,
+                    reasonText: result.text,
+                  );
+                  if (ok) {
+                    messenger.showSnackBar(const SnackBar(
+                      content: Text('Listing removed.'),
+                    ));
+                  }
+                }
               },
               onResolve: listing.isResolved
                   ? null

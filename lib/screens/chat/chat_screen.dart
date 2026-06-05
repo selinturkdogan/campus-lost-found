@@ -8,11 +8,13 @@ import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/message_crypto.dart';
 import '../../services/notification_service.dart';
 import '../../utils/image_utils.dart';
 import '../../widgets/user_avatar.dart';
+import '../profile/user_profile_view_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final String listingId;
@@ -48,16 +50,9 @@ class _ChatScreenState extends State<ChatScreen> {
     return '${sorted[0]}_${sorted[1]}';
   }
 
-  /// Reset this user's unread counter on the chat doc.
-  /// Called once when the chat screen is opened so the messages list /
-  /// profile badge clear immediately.
-  ///
-  /// Uses `update()` (not `set` with merge) so that we don't accidentally
-  /// CREATE a chat doc when the user just visits an empty conversation.
-  /// With the strict participants-only rules, creating a chat doc
-  /// requires the `participants` array — which we don't have here.
-  /// If the doc doesn't exist yet, update() throws and we silently skip,
-  /// which is correct: there's nothing to mark as read anyway.
+  /// Reset this user's unread counter on the chat doc AND stamp the
+  /// `lastReadAt.{myUid}` field used to drive read receipts on the
+  /// sender's side.
   Future<void> _markChatAsRead(String chatId, String myUid) async {
     if (_didMarkRead) return;
     _didMarkRead = true;
@@ -67,10 +62,13 @@ class _ChatScreenState extends State<ChatScreen> {
           .doc(widget.listingId)
           .collection('chats')
           .doc(chatId)
-          .update({'unreadCounts.$myUid': 0});
+          .update({
+        'unreadCounts.$myUid': 0,
+        'lastReadAt.$myUid': FieldValue.serverTimestamp(),
+      });
     } catch (_) {
-      // Non-fatal: chat doc may not exist yet, or the user isn't a
-      // participant. Either way, no unread counter to reset.
+      // Chat doc may not exist yet, or user isn't a participant. Either
+      // way, nothing to mark.
     }
   }
 
@@ -81,6 +79,15 @@ class _ChatScreenState extends State<ChatScreen> {
     double? lng,
   }) async {
     final auth = context.read<AuthProvider>();
+
+    // Refuse to send if I have blocked them.
+    if (auth.isBlocked(widget.otherUserId)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You have blocked this user. Unblock to send messages.')),
+      );
+      return;
+    }
+
     final chatId = _getChatId(auth.user!.uid, widget.otherUserId);
     final msgText = text ?? _messageCtrl.text.trim();
 
@@ -96,9 +103,8 @@ class _ChatScreenState extends State<ChatScreen> {
         'createdAt': FieldValue.serverTimestamp(),
       };
 
-      // Encrypt the text field (and the lastMessage preview) before it
-      // ever hits Firestore. Image URLs and lat/lng stay in clear since
-      // image bytes are public in Storage anyway.
+      // Encrypt text. Image bytes are already public in Storage, so the
+      // URL stays in clear. Coordinates are also clear.
       if (imageUrl != null) {
         msgData['imageUrl'] = imageUrl;
         msgData['type'] = 'image';
@@ -115,9 +121,6 @@ class _ChatScreenState extends State<ChatScreen> {
         msgData['encrypted'] = true;
       }
 
-      // Build the last-message preview. Photo/location stay as clear
-      // emoji strings (they're not sensitive). Text previews are
-      // encrypted so the messages list also doesn't leak content.
       final lastMsg = imageUrl != null
           ? '📷 Photo'
           : lat != null
@@ -131,12 +134,6 @@ class _ChatScreenState extends State<ChatScreen> {
           .collection('chats')
           .doc(chatId);
 
-      // IMPORTANT: Write the chat doc FIRST so its `participants` array
-      // exists before any message is added. The Firestore security rules
-      // require the caller to be a participant of the chat to write
-      // messages — if we add the message before the chat doc exists,
-      // the get() inside the rules sees no participants array and the
-      // write is denied with PERMISSION_DENIED.
       await chatRef.set({
         'participants': [auth.user!.uid, widget.otherUserId],
         'participantNames': {
@@ -147,26 +144,19 @@ class _ChatScreenState extends State<ChatScreen> {
         'lastMessageEncrypted': lastMsgEncrypted,
         'lastMessageAt': FieldValue.serverTimestamp(),
         'listingTitle': widget.listingTitle,
-        // Reset soft-delete for everyone — a new message should bring
-        // the conversation back into both participants' lists, even if
-        // one of them had hidden it earlier.
         'deletedFor': <String>[],
+        // Bump my own lastReadAt — I obviously read my own message.
+        'lastReadAt.${auth.user!.uid}': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
       await chatRef.collection('messages').add(msgData);
 
-      // Fire the contact notification in the background — don't block
-      // the UI on it. The push notification is also sent by the
-      // sendChatNotification Cloud Function trigger, so this client-side
-      // call is just a best-effort backup.
       // ignore: discarded_futures
       NotificationService.sendContactNotification(
         posterUid: widget.otherUserId,
         senderName: auth.displayName,
         listingTitle: widget.listingTitle,
-      ).catchError((_) {
-        // Non-fatal — Cloud Function still sends the push.
-      });
+      ).catchError((_) {});
 
       Future.delayed(const Duration(milliseconds: 100), () {
         if (_scrollCtrl.hasClients) {
@@ -195,8 +185,6 @@ class _ChatScreenState extends State<ChatScreen> {
       maxHeight: 1920,
     );
     if (picked == null) return;
-    // Compress before previewing so the user sees the final size accurately
-    // and the upload is small.
     final compressed = await ImageUtils.compress(File(picked.path));
     setState(() {
       _pendingImage = compressed;
@@ -226,8 +214,24 @@ class _ChatScreenState extends State<ChatScreen> {
     if (mounted) setState(() => _sending = false);
   }
 
+  /// Picks up the device's *current* GPS coordinates with high accuracy.
+  /// We force a fresh read (no last-known position) so the receiver gets
+  /// a truly live location, and we show a brief loading indicator in the
+  /// pending bar while the GPS warms up.
   Future<void> _getLocation() async {
     try {
+      // Quick service check — if Location is OFF on the device, no point
+      // asking for permission.
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Please turn on Location services.')),
+          );
+        }
+        return;
+      }
+
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
@@ -249,18 +253,36 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       }
 
+      // Show "Getting current location…" indicator
+      setState(() {
+        _pendingLat = null;
+        _pendingLng = null;
+        _pendingImage = null;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Getting current location…'),
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+
       final pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        // Best accuracy → short TTL → fresh fix, not a cached one.
+        desiredAccuracy: LocationAccuracy.best,
+        forceAndroidLocationManager: false,
+        timeLimit: const Duration(seconds: 15),
       );
+      if (!mounted) return;
       setState(() {
         _pendingLat = pos.latitude;
         _pendingLng = pos.longitude;
-        _pendingImage = null;
       });
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to get location.')),
+          const SnackBar(content: Text('Failed to get location. Try again.')),
         );
       }
     }
@@ -323,9 +345,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     color: Colors.green.withOpacity(0.1),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.location_on_rounded, color: Colors.green, size: 20),
+                  child: const Icon(Icons.my_location_rounded, color: Colors.green, size: 20),
                 ),
-                title: const Text('Share location'),
+                title: const Text('Share current location'),
+                subtitle: const Text('Sends your live GPS coordinates'),
                 onTap: () {
                   Navigator.pop(context);
                   _getLocation();
@@ -333,6 +356,63 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggleBlock(BuildContext context, bool currentlyBlocked) async {
+    final scheme = Theme.of(context).colorScheme;
+    final auth = context.read<AuthProvider>();
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(currentlyBlocked ? 'Unblock user?' : 'Block this user?'),
+        content: Text(
+          currentlyBlocked
+              ? 'They will be able to send you messages again.'
+              : 'They will no longer appear in your messages list and you will '
+                'not see new messages from them.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(
+              foregroundColor: currentlyBlocked ? null : scheme.error,
+            ),
+            child: Text(currentlyBlocked ? 'Unblock' : 'Block'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    final ok = currentlyBlocked
+        ? await auth.unblockUser(widget.otherUserId)
+        : await auth.blockUser(widget.otherUserId);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? (currentlyBlocked ? 'User unblocked.' : 'User blocked.')
+              : 'Action failed. Please try again.',
+        ),
+      ),
+    );
+  }
+
+  void _openOtherProfile() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => UserProfileViewScreen(
+          uid: widget.otherUserId,
+          fallbackName: widget.otherUserName,
         ),
       ),
     );
@@ -352,6 +432,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final auth = context.watch<AuthProvider>();
     final chatId = _getChatId(auth.user!.uid, widget.otherUserId);
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final iBlockedThem = auth.isBlocked(widget.otherUserId);
 
     // Reset unread counter on first build for this user.
     _markChatAsRead(chatId, auth.user!.uid);
@@ -361,7 +442,7 @@ class _ChatScreenState extends State<ChatScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Header
+            // Header — entire user-info area is tappable to open profile
             Container(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
               decoration: BoxDecoration(
@@ -379,99 +460,228 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  UserAvatar(
-                    uid: widget.otherUserId,
-                    fallbackName: widget.otherUserName,
-                    size: 36,
-                  ),
-                  const SizedBox(width: 10),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(widget.otherUserName, style: textTheme.titleSmall),
-                        Text(
-                          widget.listingTitle,
-                          style: textTheme.bodySmall?.copyWith(color: scheme.primary),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _openOtherProfile,
+                      child: Row(
+                        children: [
+                          UserAvatar(
+                            uid: widget.otherUserId,
+                            fallbackName: widget.otherUserName,
+                            size: 36,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        widget.otherUserName,
+                                        style: textTheme.titleSmall,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Icon(
+                                      Icons.chevron_right_rounded,
+                                      size: 16,
+                                      color: scheme.onSurfaceVariant,
+                                    ),
+                                  ],
+                                ),
+                                Text(
+                                  widget.listingTitle,
+                                  style: textTheme.bodySmall?.copyWith(color: scheme.primary),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
+                  ),
+                  PopupMenuButton<String>(
+                    icon: Icon(Icons.more_vert_rounded, color: scheme.onSurface),
+                    onSelected: (val) {
+                      if (val == 'profile') _openOtherProfile();
+                      if (val == 'block') _toggleBlock(context, iBlockedThem);
+                    },
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: 'profile',
+                        child: Row(
+                          children: [
+                            Icon(Icons.person_outline_rounded, size: 18),
+                            SizedBox(width: 10),
+                            Text('View profile'),
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: 'block',
+                        child: Row(
+                          children: [
+                            Icon(
+                              iBlockedThem
+                                  ? Icons.lock_open_rounded
+                                  : Icons.block_rounded,
+                              size: 18,
+                              color: scheme.error,
+                            ),
+                            const SizedBox(width: 10),
+                            Text(iBlockedThem ? 'Unblock user' : 'Block user'),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
 
+            // Block-state banner
+            if (iBlockedThem)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                color: scheme.error.withOpacity(0.1),
+                child: Row(
+                  children: [
+                    Icon(Icons.block_rounded, size: 16, color: scheme.error),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        "You've blocked this user. Unblock to chat again.",
+                        style: textTheme.bodySmall?.copyWith(
+                          color: scheme.error,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
             // Messages
             Expanded(
-              child: StreamBuilder<QuerySnapshot>(
+              child: StreamBuilder<DocumentSnapshot>(
                 stream: FirebaseFirestore.instance
                     .collection('listings')
                     .doc(widget.listingId)
                     .collection('chats')
                     .doc(chatId)
-                    .collection('messages')
-                    .orderBy('createdAt', descending: false)
                     .snapshots(),
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) {
-                    return const Center(child: CircularProgressIndicator());
+                builder: (context, chatDocSnap) {
+                  // Other participant's lastReadAt timestamp drives the
+                  // ✓✓ read receipt. If we can't read it yet, treat all
+                  // outgoing as merely sent (✓).
+                  DateTime? otherLastReadAt;
+                  if (chatDocSnap.hasData && chatDocSnap.data!.exists) {
+                    final data = chatDocSnap.data!.data() as Map<String, dynamic>?;
+                    final lastReadMap =
+                        Map<String, dynamic>.from(data?['lastReadAt'] ?? {});
+                    final ts = lastReadMap[widget.otherUserId] as Timestamp?;
+                    otherLastReadAt = ts?.toDate();
                   }
 
-                  final messages = snapshot.data!.docs;
+                  return StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance
+                        .collection('listings')
+                        .doc(widget.listingId)
+                        .collection('chats')
+                        .doc(chatId)
+                        .collection('messages')
+                        .orderBy('createdAt', descending: false)
+                        .snapshots(),
+                    builder: (context, snapshot) {
+                      if (!snapshot.hasData) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
 
-                  if (messages.isEmpty) {
-                    return Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.chat_bubble_outline_rounded, size: 48, color: scheme.onSurfaceVariant),
-                          const SizedBox(height: 12),
-                          Text('No messages yet.', style: textTheme.bodyMedium),
-                          const SizedBox(height: 4),
-                          Text('Say hello!', style: textTheme.bodySmall),
-                        ],
-                      ),
-                    );
-                  }
+                      final messages = snapshot.data!.docs;
 
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (_scrollCtrl.hasClients) {
-                      _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
-                    }
-                  });
+                      if (messages.isEmpty) {
+                        return Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.chat_bubble_outline_rounded,
+                                  size: 48, color: scheme.onSurfaceVariant),
+                              const SizedBox(height: 12),
+                              Text('No messages yet.', style: textTheme.bodyMedium),
+                              const SizedBox(height: 4),
+                              Text('Say hello!', style: textTheme.bodySmall),
+                            ],
+                          ),
+                        );
+                      }
 
-                  return ListView.builder(
-                    controller: _scrollCtrl,
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                    itemCount: messages.length,
-                    itemBuilder: (_, i) {
-                      final data = messages[i].data() as Map<String, dynamic>;
-                      final isMe = data['senderId'] == auth.user!.uid;
-                      final createdAt = (data['createdAt'] as Timestamp?)?.toDate();
-                      final type = data['type'] ?? 'text';
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (_scrollCtrl.hasClients) {
+                          _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
+                        }
+                      });
 
-                      // Decrypt the text. Falls back to the raw value for
-                      // messages written before encryption shipped.
-                      final rawText = (data['text'] as String?) ?? '';
-                      final isEncrypted = data['encrypted'] == true;
-                      final decryptedText = isEncrypted
-                          ? MessageCrypto.decryptOrPassthrough(rawText)
-                          : rawText;
+                      // Build a flat list that may include date-separator
+                      // chips between messages from different days.
+                      final items = <Widget>[];
+                      DateTime? lastDay;
+                      for (var i = 0; i < messages.length; i++) {
+                        final data = messages[i].data() as Map<String, dynamic>;
+                        final isMe = data['senderId'] == auth.user!.uid;
+                        final createdAt =
+                            (data['createdAt'] as Timestamp?)?.toDate();
+                        final type = data['type'] ?? 'text';
 
-                      return _MessageBubble(
-                        type: type,
-                        text: decryptedText,
-                        imageUrl: data['imageUrl'],
-                        lat: data['lat']?.toDouble(),
-                        lng: data['lng']?.toDouble(),
-                        isMe: isMe,
-                        senderName: data['senderName'] ?? '',
-                        time: createdAt,
-                        scheme: scheme,
-                        textTheme: textTheme,
-                        isDark: isDark,
+                        // Date separator
+                        if (createdAt != null) {
+                          final day = DateTime(
+                              createdAt.year, createdAt.month, createdAt.day);
+                          if (lastDay == null || day != lastDay) {
+                            items.add(_DateSeparator(day: day, scheme: scheme));
+                            lastDay = day;
+                          }
+                        }
+
+                        final rawText = (data['text'] as String?) ?? '';
+                        final isEncrypted = data['encrypted'] == true;
+                        final decryptedText = isEncrypted
+                            ? MessageCrypto.decryptOrPassthrough(rawText)
+                            : rawText;
+
+                        // Read state for outgoing messages only.
+                        final readByOther = isMe &&
+                            createdAt != null &&
+                            otherLastReadAt != null &&
+                            !otherLastReadAt.isBefore(createdAt);
+
+                        items.add(_MessageBubble(
+                          type: type,
+                          text: decryptedText,
+                          imageUrl: data['imageUrl'],
+                          lat: (data['lat'] as num?)?.toDouble(),
+                          lng: (data['lng'] as num?)?.toDouble(),
+                          isMe: isMe,
+                          senderId: data['senderId'] ?? '',
+                          senderName: data['senderName'] ?? '',
+                          time: createdAt,
+                          scheme: scheme,
+                          textTheme: textTheme,
+                          isDark: isDark,
+                          readByOther: readByOther,
+                        ));
+                      }
+
+                      return ListView(
+                        controller: _scrollCtrl,
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                        children: items,
                       );
                     },
                   );
@@ -479,7 +689,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
 
-            // Pending preview
+            // Pending preview — image
             if (_pendingImage != null)
               Container(
                 padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
@@ -508,26 +718,45 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
 
+            // Pending preview — location with a tiny map
             if (_pendingLat != null && _pendingLng != null)
               Container(
                 padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
                 color: scheme.surfaceVariant,
                 child: Row(
                   children: [
-                    Container(
-                      width: 44, height: 44,
-                      decoration: BoxDecoration(
-                        color: Colors.green.withOpacity(0.15),
-                        shape: BoxShape.circle,
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: SizedBox(
+                        width: 60,
+                        height: 60,
+                        child: AbsorbPointer(
+                          child: GoogleMap(
+                            initialCameraPosition: CameraPosition(
+                              target: LatLng(_pendingLat!, _pendingLng!),
+                              zoom: 15,
+                            ),
+                            markers: {
+                              Marker(
+                                markerId: const MarkerId('me'),
+                                position:
+                                    LatLng(_pendingLat!, _pendingLng!),
+                              ),
+                            },
+                            liteModeEnabled: true,
+                            zoomControlsEnabled: false,
+                            myLocationButtonEnabled: false,
+                          ),
+                        ),
                       ),
-                      child: const Icon(Icons.location_on_rounded, color: Colors.green, size: 22),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Share your location?', style: textTheme.bodyMedium),
+                          Text('Share your current location?',
+                              style: textTheme.bodyMedium),
                           Text(
                             '${_pendingLat!.toStringAsFixed(5)}, ${_pendingLng!.toStringAsFixed(5)}',
                             style: textTheme.bodySmall,
@@ -556,7 +785,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
 
-            // Input bar
+            // Input bar — disabled if I've blocked the other user
             Container(
               padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
               decoration: BoxDecoration(
@@ -566,7 +795,7 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Row(
                 children: [
                   GestureDetector(
-                    onTap: _sending ? null : _showAttachmentOptions,
+                    onTap: (_sending || iBlockedThem) ? null : _showAttachmentOptions,
                     child: Container(
                       width: 40, height: 40,
                       decoration: BoxDecoration(
@@ -581,9 +810,12 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: TextField(
                       controller: _messageCtrl,
                       maxLines: null,
+                      enabled: !iBlockedThem,
                       textCapitalization: TextCapitalization.sentences,
                       decoration: InputDecoration(
-                        hintText: 'Type a message...',
+                        hintText: iBlockedThem
+                            ? 'You blocked this user'
+                            : 'Type a message...',
                         filled: true,
                         fillColor: scheme.surfaceVariant,
                         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -604,15 +836,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   const SizedBox(width: 8),
                   GestureDetector(
-                    // Don't pass `text:` — that disables the auto-clear
-                    // logic inside _sendMessage. Letting it pull from
-                    // _messageCtrl directly means the field is cleared
-                    // after the send.
-                    onTap: _sending ? null : () => _sendMessage(),
+                    onTap: (_sending || iBlockedThem) ? null : () => _sendMessage(),
                     child: Container(
                       width: 44, height: 44,
                       decoration: BoxDecoration(
-                        color: _sending ? scheme.surfaceVariant : scheme.primary,
+                        color: (_sending || iBlockedThem) ? scheme.surfaceVariant : scheme.primary,
                         shape: BoxShape.circle,
                       ),
                       child: _sending
@@ -620,13 +848,62 @@ class _ChatScreenState extends State<ChatScreen> {
                               padding: EdgeInsets.all(12),
                               child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                             )
-                          : const Icon(Icons.send_rounded, color: Colors.white, size: 20),
+                          : Icon(
+                              Icons.send_rounded,
+                              color: iBlockedThem
+                                  ? scheme.onSurfaceVariant
+                                  : Colors.white,
+                              size: 20,
+                            ),
                     ),
                   ),
                 ],
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DateSeparator extends StatelessWidget {
+  final DateTime day;
+  final ColorScheme scheme;
+
+  const _DateSeparator({required this.day, required this.scheme});
+
+  String _label() {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = today.subtract(const Duration(days: 1));
+    if (day == today) return 'Today';
+    if (day == yesterday) return 'Yesterday';
+    if (now.difference(day).inDays < 7) {
+      return DateFormat('EEEE').format(day); // e.g. Monday
+    }
+    return DateFormat('MMM d, yyyy').format(day); // e.g. Jan 5, 2026
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: scheme.surfaceVariant,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            _label(),
+            style: TextStyle(
+              fontSize: 11,
+              color: scheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ),
       ),
     );
@@ -640,11 +917,13 @@ class _MessageBubble extends StatelessWidget {
   final double? lat;
   final double? lng;
   final bool isMe;
+  final String senderId;
   final String senderName;
   final DateTime? time;
   final ColorScheme scheme;
   final TextTheme textTheme;
   final bool isDark;
+  final bool readByOther;
 
   const _MessageBubble({
     required this.type,
@@ -653,11 +932,13 @@ class _MessageBubble extends StatelessWidget {
     this.lat,
     this.lng,
     required this.isMe,
+    required this.senderId,
     required this.senderName,
     required this.time,
     required this.scheme,
     required this.textTheme,
     required this.isDark,
+    required this.readByOther,
   });
 
   Future<void> _openLocation() async {
@@ -666,6 +947,45 @@ class _MessageBubble extends StatelessWidget {
     if (await canLaunchUrl(url)) {
       await launchUrl(url, mode: LaunchMode.externalApplication);
     }
+  }
+
+  void _showFullTimestamp(BuildContext context) {
+    if (time == null) return;
+    final full = DateFormat('EEEE, MMM d, yyyy • HH:mm').format(time!);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(full),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _openSenderProfile(BuildContext context) {
+    if (senderId.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => UserProfileViewScreen(
+          uid: senderId,
+          fallbackName: senderName,
+        ),
+      ),
+    );
+  }
+
+  Widget _readReceiptIcon() {
+    if (!isMe) return const SizedBox.shrink();
+    // Read by the other side → double check in a slightly brighter tint.
+    if (readByOther) {
+      return const Padding(
+        padding: EdgeInsets.only(left: 4),
+        child: Icon(Icons.done_all_rounded, size: 14, color: Color(0xFF93C5FD)),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: Icon(Icons.done_rounded, size: 14, color: Colors.white.withOpacity(0.7)),
+    );
   }
 
   @override
@@ -677,142 +997,213 @@ class _MessageBubble extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           if (!isMe) ...[
-            Container(
-              width: 28, height: 28,
-              decoration: BoxDecoration(
-                color: scheme.primary.withOpacity(0.15),
-                shape: BoxShape.circle,
-              ),
-              child: Center(
-                child: Text(
-                  senderName.isNotEmpty ? senderName[0].toUpperCase() : '?',
-                  style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 11),
+            GestureDetector(
+              onTap: () => _openSenderProfile(context),
+              child: Container(
+                width: 28, height: 28,
+                decoration: BoxDecoration(
+                  color: scheme.primary.withOpacity(0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: Center(
+                  child: Text(
+                    senderName.isNotEmpty ? senderName[0].toUpperCase() : '?',
+                    style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 11),
+                  ),
                 ),
               ),
             ),
             const SizedBox(width: 8),
           ],
           Flexible(
-            child: Container(
-              constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.7),
-              decoration: BoxDecoration(
-                color: isMe
-                    ? scheme.primary
-                    : (isDark ? const Color(0xFF1C1C1C) : scheme.surfaceVariant),
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(isMe ? 16 : 4),
-                  bottomRight: Radius.circular(isMe ? 4 : 16),
+            child: GestureDetector(
+              onLongPress: () => _showFullTimestamp(context),
+              child: Container(
+                constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
+                decoration: BoxDecoration(
+                  color: isMe
+                      ? scheme.primary
+                      : (isDark ? const Color(0xFF1C1C1C) : scheme.surfaceVariant),
+                  borderRadius: BorderRadius.only(
+                    topLeft: const Radius.circular(16),
+                    topRight: const Radius.circular(16),
+                    bottomLeft: Radius.circular(isMe ? 16 : 4),
+                    bottomRight: Radius.circular(isMe ? 4 : 16),
+                  ),
                 ),
-              ),
-              child: type == 'image' && imageUrl != null
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.only(
-                        topLeft: const Radius.circular(16),
-                        topRight: const Radius.circular(16),
-                        bottomLeft: Radius.circular(isMe ? 16 : 4),
-                        bottomRight: Radius.circular(isMe ? 4 : 16),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          CachedNetworkImage(
-                            imageUrl: imageUrl!,
-                            width: 220,
-                            fit: BoxFit.cover,
-                          ),
-                          if (time != null)
+                child: type == 'image' && imageUrl != null
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.only(
+                          topLeft: const Radius.circular(16),
+                          topRight: const Radius.circular(16),
+                          bottomLeft: Radius.circular(isMe ? 16 : 4),
+                          bottomRight: Radius.circular(isMe ? 4 : 16),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            CachedNetworkImage(
+                              imageUrl: imageUrl!,
+                              width: 220,
+                              fit: BoxFit.cover,
+                            ),
                             Padding(
                               padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
-                              child: Text(
-                                DateFormat('h:mm a').format(time!),
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  color: isMe ? Colors.white.withOpacity(0.7) : scheme.onSurfaceVariant,
-                                ),
+                              child: _MetaFooter(
+                                time: time,
+                                isMe: isMe,
+                                scheme: scheme,
+                                readReceipt: _readReceiptIcon(),
                               ),
                             ),
-                        ],
-                      ),
-                    )
-                  : type == 'location' && lat != null && lng != null
-                      ? GestureDetector(
-                          onTap: _openLocation,
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.location_on_rounded,
-                                  color: isMe ? Colors.white : Colors.green,
-                                  size: 20,
-                                ),
-                                const SizedBox(width: 8),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Shared Location',
-                                      style: TextStyle(
-                                        color: isMe ? Colors.white : scheme.onSurface,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                    Text(
-                                      'Tap to open in Maps',
-                                      style: TextStyle(
-                                        color: isMe ? Colors.white.withOpacity(0.7) : scheme.onSurfaceVariant,
-                                        fontSize: 11,
-                                      ),
-                                    ),
-                                    if (time != null)
-                                      Text(
-                                        DateFormat('h:mm a').format(time!),
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          color: isMe ? Colors.white.withOpacity(0.7) : scheme.onSurfaceVariant,
+                          ],
+                        ),
+                      )
+                    : type == 'location' && lat != null && lng != null
+                        ? GestureDetector(
+                            onTap: _openLocation,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.only(
+                                topLeft: const Radius.circular(16),
+                                topRight: const Radius.circular(16),
+                                bottomLeft: Radius.circular(isMe ? 16 : 4),
+                                bottomRight: Radius.circular(isMe ? 4 : 16),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Live map preview (lite mode)
+                                  SizedBox(
+                                    width: 220,
+                                    height: 130,
+                                    child: AbsorbPointer(
+                                      child: GoogleMap(
+                                        initialCameraPosition: CameraPosition(
+                                          target: LatLng(lat!, lng!),
+                                          zoom: 15,
                                         ),
+                                        markers: {
+                                          Marker(
+                                            markerId: const MarkerId('shared'),
+                                            position: LatLng(lat!, lng!),
+                                          ),
+                                        },
+                                        liteModeEnabled: true,
+                                        zoomControlsEnabled: false,
+                                        myLocationButtonEnabled: false,
+                                        compassEnabled: false,
                                       ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        )
-                      : Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                text,
-                                style: TextStyle(
-                                  color: isMe ? Colors.white : scheme.onSurface,
-                                  fontSize: 14,
-                                  height: 1.4,
-                                ),
+                                    ),
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.location_on_rounded,
+                                              color: isMe ? Colors.white : Colors.green,
+                                              size: 16,
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              'Shared Location',
+                                              style: TextStyle(
+                                                color: isMe ? Colors.white : scheme.onSurface,
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        Text(
+                                          'Tap to open in Maps',
+                                          style: TextStyle(
+                                            color: isMe ? Colors.white.withOpacity(0.75) : scheme.onSurfaceVariant,
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        _MetaFooter(
+                                          time: time,
+                                          isMe: isMe,
+                                          scheme: scheme,
+                                          readReceipt: _readReceiptIcon(),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ),
-                              if (time != null) ...[
-                                const SizedBox(height: 4),
+                            ),
+                          )
+                        : Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
                                 Text(
-                                  DateFormat('h:mm a').format(time!),
+                                  text,
                                   style: TextStyle(
-                                    fontSize: 10,
-                                    color: isMe ? Colors.white.withOpacity(0.7) : scheme.onSurfaceVariant,
+                                    color: isMe ? Colors.white : scheme.onSurface,
+                                    fontSize: 14,
+                                    height: 1.4,
                                   ),
                                 ),
+                                const SizedBox(height: 4),
+                                _MetaFooter(
+                                  time: time,
+                                  isMe: isMe,
+                                  scheme: scheme,
+                                  readReceipt: _readReceiptIcon(),
+                                ),
                               ],
-                            ],
+                            ),
                           ),
-                        ),
+              ),
             ),
           ),
           if (isMe) const SizedBox(width: 8),
         ],
       ),
+    );
+  }
+}
+
+/// Tiny row that combines the timestamp with the read-receipt icon. Used
+/// at the bottom of every message bubble.
+class _MetaFooter extends StatelessWidget {
+  final DateTime? time;
+  final bool isMe;
+  final ColorScheme scheme;
+  final Widget readReceipt;
+
+  const _MetaFooter({
+    required this.time,
+    required this.isMe,
+    required this.scheme,
+    required this.readReceipt,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        if (time != null)
+          Text(
+            DateFormat('HH:mm').format(time!),
+            style: TextStyle(
+              fontSize: 10,
+              color: isMe ? Colors.white.withOpacity(0.75) : scheme.onSurfaceVariant,
+            ),
+          ),
+        readReceipt,
+      ],
     );
   }
 }

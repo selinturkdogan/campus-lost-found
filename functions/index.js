@@ -159,9 +159,21 @@ exports.sendTempPassword = onCall(
 
     const auth = getAuth();
 
-    // 3) Rate limit: 1 request per 60 seconds per email
+    // 3) If this user has already completed first-time setup (i.e. they
+    //    chose their own password), refuse to reset it here. They must use
+    //    the normal email + password sign-in, or "Forgot password" if they
+    //    actually forgot it. This prevents accidental password resets when
+    //    a returning user taps "Continue with Google" by mistake.
     const usersRef = db.collection("users").doc(request.auth.uid);
     const userSnap = await usersRef.get();
+    if (userSnap.exists && userSnap.data().mustChangePassword === false) {
+      throw new HttpsError(
+        "already-exists",
+        "You already have an account. Please sign in with your email and password, or use 'Forgot password' if you need to reset it."
+      );
+    }
+
+    // 4) Rate limit: 1 request per 60 seconds per email
     if (userSnap.exists) {
       const last = userSnap.data().lastTempPasswordSentAt;
       if (last && last.toDate) {
@@ -539,6 +551,118 @@ exports.sendChatNotification = onDocumentCreated(
       });
     } catch (e) {
       console.error("Failed to send chat push:", e);
+    }
+  }
+);
+
+// ── Listing created: notify owners of potential opposite-type matches ────────
+// When a new Lost listing is posted we scan the recent Found listings for
+// the same category at the same campus location, and vice-versa. Each
+// match writes an in-app notification ("match" type) to BOTH parties so
+// the bell badge picks it up. Push notifications are intentionally
+// skipped — the user wanted the match signal to live only inside the app.
+exports.onListingCreated = onDocumentCreated(
+  "listings/{listingId}",
+  async (event) => {
+    const listing = event.data.data();
+    const { listingId } = event.params;
+    const db = getFirestore();
+
+    if (!listing) return;
+    const type = listing.type; // 'lost' or 'found'
+    const category = listing.category;
+    const location = listing.location;
+    const ownerId = listing.ownerId;
+    const title = listing.title || "(untitled)";
+    if (!type || !category || !location || !ownerId) return;
+
+    // Look at the opposite type, same category, same location, within the
+    // last 30 days, still active (not resolved).
+    const oppositeType = type === "lost" ? "found" : "lost";
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    let candidates;
+    try {
+      const snap = await db
+        .collection("listings")
+        .where("type", "==", oppositeType)
+        .where("category", "==", category)
+        .where("location", "==", location)
+        .where("isResolved", "==", false)
+        .get();
+      // Filter by date and exclude listings posted by the same user — we
+      // don't want self-matches. Done client-side because composite
+      // indexes for createdAt + 3 equality fields get expensive.
+      candidates = snap.docs.filter((d) => {
+        const data = d.data();
+        if (data.ownerId === ownerId) return false;
+        const createdAt = data.createdAt;
+        if (!createdAt || !createdAt.toDate) return true; // tolerate missing
+        return createdAt.toDate() >= thirtyDaysAgo;
+      });
+    } catch (e) {
+      console.error("Match query failed:", e);
+      return;
+    }
+
+    if (candidates.length === 0) return;
+
+    // For the new listing's owner — one combined notification telling them
+    // there are N matches.
+    const newOwnerBody =
+      candidates.length === 1
+        ? `Someone posted a ${oppositeType} item that matches "${title}".`
+        : `${candidates.length} ${oppositeType} items match your "${title}".`;
+    try {
+      await db
+        .collection("users")
+        .doc(ownerId)
+        .collection("notifications")
+        .add({
+          title:
+            type === "lost"
+              ? "Potential match found! 🎯"
+              : "This could be someone's lost item 🎯",
+          body: newOwnerBody,
+          type: "match",
+          // Deep-link to the BEST candidate (newest one).
+          listingId: candidates[0].id,
+          matchSourceId: listingId,
+          read: false,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+    } catch (e) {
+      console.error("Failed to write match notif for new owner:", e);
+    }
+
+    // For each candidate's owner — a notification saying their old listing
+    // has a fresh counterpart.
+    for (const cand of candidates) {
+      const candData = cand.data();
+      const candOwnerId = candData.ownerId;
+      if (!candOwnerId || candOwnerId === ownerId) continue;
+      const candTitle = candData.title || "your listing";
+      try {
+        await db
+          .collection("users")
+          .doc(candOwnerId)
+          .collection("notifications")
+          .add({
+            title: "Potential match found! 🎯",
+            body:
+              type === "lost"
+                ? `Someone lost a ${category} (${title}) — could it match "${candTitle}"?`
+                : `Someone found a ${category} (${title}) — could it be "${candTitle}"?`,
+            type: "match",
+            // Deep-link the candidate's owner to the new listing.
+            listingId: listingId,
+            matchSourceId: cand.id,
+            read: false,
+            createdAt: FieldValue.serverTimestamp(),
+          });
+      } catch (e) {
+        console.error("Failed to write match notif for candidate owner:", e);
+      }
     }
   }
 );

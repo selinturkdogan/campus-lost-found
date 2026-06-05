@@ -12,21 +12,25 @@ import '../../providers/listings_provider.dart';
 import '../../utils/app_routes.dart';
 import '../../utils/app_theme.dart';
 import '../../widgets/comments_section.dart';
+import '../../widgets/delete_reason_sheet.dart';
 import '../../widgets/user_avatar.dart';
 import '../chat/chat_screen.dart';
 
+// Approximate coordinates for Final International University — Çatalköy /
+// Kyrenia campus (Northern Cyprus). Each entry is offset slightly around
+// the main campus point so that different listings render distinct pins.
 const Map<String, LatLng> _campusCoords = {
-  'Main Library':         LatLng(35.3302, 33.3586),
-  'Student Union':        LatLng(35.3304, 33.3591),
-  'Engineering Building': LatLng(35.3297, 33.3593),
-  'Science Hall':         LatLng(35.3295, 33.3582),
-  'Arts Center':          LatLng(35.3307, 33.3580),
-  'Dining Hall':          LatLng(35.3300, 33.3589),
-  'Gym & Recreation':     LatLng(35.3293, 33.3595),
-  'Residence Halls':      LatLng(35.3309, 33.3594),
-  'Parking Lots':         LatLng(35.3291, 33.3584),
-  'Campus Grounds':       LatLng(35.3301, 33.3588),
-  'Other':                LatLng(35.3301, 33.3588),
+  'Main Library':         LatLng(35.3470, 33.3142),
+  'Student Union':        LatLng(35.3472, 33.3145),
+  'Engineering Building': LatLng(35.3475, 33.3148),
+  'Science Hall':         LatLng(35.3468, 33.3140),
+  'Arts Center':          LatLng(35.3466, 33.3144),
+  'Dining Hall':          LatLng(35.3471, 33.3146),
+  'Gym & Recreation':     LatLng(35.3464, 33.3150),
+  'Residence Halls':      LatLng(35.3478, 33.3152),
+  'Parking Lots':         LatLng(35.3473, 33.3138),
+  'Campus Grounds':       LatLng(35.3470, 33.3145),
+  'Other':                LatLng(35.3470, 33.3145),
 };
 
 class ListingDetailScreen extends StatefulWidget {
@@ -94,27 +98,32 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
   }
 
   Future<void> _confirmDelete() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: Theme.of(context).colorScheme.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Delete listing?'),
-        content: const Text('This action cannot be undone.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.error),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+    final result = await showDeleteReasonSheet(
+      context,
+      listingTitle: widget.listing.title,
     );
-    if (confirmed == true && mounted) {
-      final auth = context.read<AuthProvider>();
-      final success = await context.read<ListingsProvider>().deleteListing(widget.listing.id, auth.user!.uid);
-      if (success && mounted) Navigator.pop(context);
+    if (result == null || !mounted) return;
+    final auth = context.read<AuthProvider>();
+    final provider = context.read<ListingsProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+
+    if (result.action == DeleteReasonAction.resolve) {
+      final ok = await provider.markResolved(widget.listing.id,
+          reason: result.reason);
+      if (ok && mounted) {
+        messenger.showSnackBar(const SnackBar(
+          content: Text('Marked as resolved — great news! 🎉'),
+        ));
+        Navigator.pop(context);
+      }
+    } else {
+      final ok = await provider.deleteListing(
+        widget.listing.id,
+        auth.user!.uid,
+        reason: result.reason,
+        reasonText: result.text,
+      );
+      if (ok && mounted) Navigator.pop(context);
     }
   }
 
@@ -358,15 +367,15 @@ class _LocationMapCardState extends State<_LocationMapCard> {
   Future<void> _openInGoogleMaps() async {
     final lat = widget.coords.latitude;
     final lng = widget.coords.longitude;
-    final label = Uri.encodeComponent(widget.locationName);
 
-    // Try the native Google Maps URI scheme first (Android/iOS app),
-    // then fall back to the universal web URL which the OS will route
-    // to the maps app if installed, or to the browser otherwise.
+    // Use Google's official "Maps URL" format — most reliable across
+    // Android and iOS. The OS routes it to the installed Maps app, and
+    // falls back to the browser if Maps is not installed.
+    // https://developers.google.com/maps/documentation/urls/get-started
     final candidates = <Uri>[
-      Uri.parse('geo:$lat,$lng?q=$lat,$lng($label)'),
       Uri.parse(
-          'https://www.google.com/maps/search/?api=1&query=$lat,$lng'),
+          'https://www.google.com/maps/search/?api=1&query=$lat%2C$lng'),
+      Uri.parse('geo:$lat,$lng?q=$lat,$lng'),
     ];
 
     for (final uri in candidates) {

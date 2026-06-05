@@ -274,6 +274,7 @@ class NotificationsScreen extends StatelessWidget {
       case 'comment': return Icons.mode_comment_outlined;
       case 'mention': return Icons.alternate_email_rounded;
       case 'expiry': return Icons.access_time_rounded;
+      case 'match': return Icons.compare_arrows_rounded;
       default: return Icons.notifications_outlined;
     }
   }
@@ -284,6 +285,7 @@ class NotificationsScreen extends StatelessWidget {
       case 'comment': return const Color(0xFF0EA5E9);
       case 'mention': return const Color(0xFF7C3AED);
       case 'expiry': return Colors.orange;
+      case 'match': return const Color(0xFF22C55E);
       default: return Colors.grey;
     }
   }
