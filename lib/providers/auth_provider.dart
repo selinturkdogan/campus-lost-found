@@ -148,11 +148,32 @@ class AuthProvider extends ChangeNotifier {
       // Sign in to Firebase with Google credential (so Cloud Function sees auth)
       await _auth.signInWithCredential(credential);
 
-      // Call backend to generate temp password and email it
+      // Call backend. For a NEW user it generates a temp password and
+      // emails it. For a RETURNING user (already completed first-time
+      // setup) it returns `alreadyRegistered: true` and we just keep
+      // the Google session active — the user is signed in and skips
+      // the email/password step.
       final callable = _functions.httpsCallable('sendTempPassword');
-      await callable.call();
+      final result = await callable.call();
+      final data = Map<String, dynamic>.from(
+          (result.data as Map?) ?? const <String, dynamic>{});
+      final alreadyRegistered = data['alreadyRegistered'] == true;
 
-      // Sign out the Google session — user must now sign in with email/password
+      if (alreadyRegistered) {
+        // Returning user — they're already signed in via Google. Refresh
+        // local user state and let the splash/router send them to home.
+        if (_auth.currentUser != null) {
+          await _fetchUserDoc(_auth.currentUser!.uid);
+          // Bind this device's FCM token to the freshly signed-in user.
+          await NotificationService().saveTokenForCurrentUser();
+        }
+        _infoMessage = 'Welcome back, ${displayName}!';
+        notifyListeners();
+        return true;
+      }
+
+      // New user — temp password emailed. Sign out Google so the user
+      // can complete first sign-in with the password they just received.
       await _auth.signOut();
       await _googleSignIn.signOut();
 

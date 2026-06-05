@@ -64,10 +64,27 @@ class _LoginScreenState extends State<LoginScreen>
     final auth = context.read<AuthProvider>();
     final ok = await auth.requestTempPasswordViaGoogle();
     if (!mounted) return;
-    if (ok && auth.infoMessage != null) {
-      _showInfoDialog(auth.infoMessage!);
-      auth.clearMessages();
-      setState(() => _showEmailForm = true);
+    if (ok) {
+      // If the user is already authenticated after the call, this was a
+      // returning user — the Google session itself is the sign-in, so
+      // jump straight to the feed (or set-password if they somehow
+      // still need it).
+      if (auth.isAuthenticated) {
+        auth.clearMessages();
+        if (auth.mustChangePassword) {
+          Navigator.pushReplacementNamed(context, AppRoutes.setPassword);
+        } else {
+          Navigator.pushReplacementNamed(context, AppRoutes.feed);
+        }
+        return;
+      }
+      // Otherwise it's a new user — temp password was emailed, ask them
+      // to check their inbox and sign in with that password.
+      if (auth.infoMessage != null) {
+        _showInfoDialog(auth.infoMessage!);
+        auth.clearMessages();
+        setState(() => _showEmailForm = true);
+      }
     } else if (auth.errorMessage != null) {
       _showSnack(auth.errorMessage!, error: true);
     }

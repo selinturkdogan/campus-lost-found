@@ -8,7 +8,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/message_crypto.dart';
 import '../../services/notification_service.dart';
@@ -731,21 +732,38 @@ class _ChatScreenState extends State<ChatScreen> {
                         width: 60,
                         height: 60,
                         child: AbsorbPointer(
-                          child: GoogleMap(
-                            initialCameraPosition: CameraPosition(
-                              target: LatLng(_pendingLat!, _pendingLng!),
-                              zoom: 15,
-                            ),
-                            markers: {
-                              Marker(
-                                markerId: const MarkerId('me'),
-                                position:
-                                    LatLng(_pendingLat!, _pendingLng!),
+                          child: FlutterMap(
+                            options: MapOptions(
+                              initialCenter:
+                                  LatLng(_pendingLat!, _pendingLng!),
+                              initialZoom: 15,
+                              interactionOptions: const InteractionOptions(
+                                flags: InteractiveFlag.none,
                               ),
-                            },
-                            liteModeEnabled: true,
-                            zoomControlsEnabled: false,
-                            myLocationButtonEnabled: false,
+                            ),
+                            children: [
+                              TileLayer(
+                                urlTemplate:
+                                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                userAgentPackageName:
+                                    'com.example.campus_lf_new',
+                              ),
+                              MarkerLayer(
+                                markers: [
+                                  Marker(
+                                    point: LatLng(
+                                        _pendingLat!, _pendingLng!),
+                                    width: 30,
+                                    height: 30,
+                                    child: const Icon(
+                                      Icons.location_on,
+                                      color: Colors.red,
+                                      size: 28,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
                         ),
                       ),
@@ -1077,21 +1095,37 @@ class _MessageBubble extends StatelessWidget {
                                     width: 220,
                                     height: 130,
                                     child: AbsorbPointer(
-                                      child: GoogleMap(
-                                        initialCameraPosition: CameraPosition(
-                                          target: LatLng(lat!, lng!),
-                                          zoom: 15,
-                                        ),
-                                        markers: {
-                                          Marker(
-                                            markerId: const MarkerId('shared'),
-                                            position: LatLng(lat!, lng!),
+                                      child: FlutterMap(
+                                        options: MapOptions(
+                                          initialCenter: LatLng(lat!, lng!),
+                                          initialZoom: 15,
+                                          interactionOptions:
+                                              const InteractionOptions(
+                                            flags: InteractiveFlag.none,
                                           ),
-                                        },
-                                        liteModeEnabled: true,
-                                        zoomControlsEnabled: false,
-                                        myLocationButtonEnabled: false,
-                                        compassEnabled: false,
+                                        ),
+                                        children: [
+                                          TileLayer(
+                                            urlTemplate:
+                                                'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                            userAgentPackageName:
+                                                'com.example.campus_lf_new',
+                                          ),
+                                          MarkerLayer(
+                                            markers: [
+                                              Marker(
+                                                point: LatLng(lat!, lng!),
+                                                width: 40,
+                                                height: 40,
+                                                child: const Icon(
+                                                  Icons.location_on,
+                                                  color: Colors.red,
+                                                  size: 36,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ),

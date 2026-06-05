@@ -23,6 +23,8 @@ class CommentsSection extends StatefulWidget {
 
 class _CommentsSectionState extends State<CommentsSection> {
   final _ctrl = TextEditingController();
+  final _focusNode = FocusNode();
+  final _composerKey = GlobalKey();
   bool _busy = false;
 
   // Mention picker state
@@ -38,8 +40,42 @@ class _CommentsSectionState extends State<CommentsSection> {
   @override
   void dispose() {
     _ctrl.dispose();
+    _focusNode.dispose();
     _searchDebounce?.cancel();
     super.dispose();
+  }
+
+  /// Start a reply to [c] — prepends `@authorName ` to the composer,
+  /// registers the mention so the comment's author actually gets
+  /// notified, then focuses the field and scrolls it into view.
+  void _replyTo(Comment c) {
+    // Build a token that matches the existing @-mention regex
+    // (letters / digits / dots / dashes / underscores only).
+    final token = '@${c.authorName.replaceAll(RegExp(r'\s+'), '_')}';
+    _resolvedMentions[token] = c.authorId;
+
+    // Insert at the start if the composer is empty, otherwise prepend
+    // with a space so the user's existing draft isn't lost.
+    final current = _ctrl.text.trimLeft();
+    final newText = current.isEmpty ? '$token ' : '$token $current';
+    _ctrl.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: newText.length),
+    );
+
+    // Bring the composer into view and pop the keyboard.
+    Future.delayed(const Duration(milliseconds: 50), () {
+      final ctx = _composerKey.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
+          alignment: 0.2,
+        );
+      }
+      _focusNode.requestFocus();
+    });
   }
 
   void _onTextChanged(String value) {
@@ -233,6 +269,7 @@ class _CommentsSectionState extends State<CommentsSection> {
         // Composer (only if signed in)
         if (auth.isAuthenticated) ...[
           Container(
+            key: _composerKey,
             padding: const EdgeInsets.fromLTRB(12, 12, 8, 8),
             decoration: BoxDecoration(
               color: scheme.surface,
@@ -253,6 +290,7 @@ class _CommentsSectionState extends State<CommentsSection> {
                     Expanded(
                       child: TextField(
                         controller: _ctrl,
+                        focusNode: _focusNode,
                         onChanged: _onTextChanged,
                         maxLines: null,
                         textCapitalization: TextCapitalization.sentences,
@@ -365,7 +403,9 @@ class _CommentsSectionState extends State<CommentsSection> {
                             (c.authorId == myUid ||
                                 widget.listingOwnerId == myUid ||
                                 auth.isAdmin),
+                        canReply: auth.isAuthenticated && c.authorId != myUid,
                         onDelete: () => _confirmDelete(c),
+                        onReply: () => _replyTo(c),
                       ))
                   .toList(),
             );
@@ -379,12 +419,16 @@ class _CommentsSectionState extends State<CommentsSection> {
 class _CommentTile extends StatelessWidget {
   final Comment comment;
   final bool canDelete;
+  final bool canReply;
   final VoidCallback onDelete;
+  final VoidCallback onReply;
 
   const _CommentTile({
     required this.comment,
     required this.canDelete,
+    required this.canReply,
     required this.onDelete,
+    required this.onReply,
   });
 
   @override
@@ -436,6 +480,35 @@ class _CommentTile extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 _CommentBody(text: comment.text),
+                if (canReply)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: InkWell(
+                      onTap: onReply,
+                      borderRadius: BorderRadius.circular(6),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 4, vertical: 2),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.reply_rounded,
+                                size: 13,
+                                color: scheme.onSurfaceVariant),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Reply',
+                              style: textTheme.bodySmall?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),

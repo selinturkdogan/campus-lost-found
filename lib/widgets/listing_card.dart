@@ -45,18 +45,18 @@ class ListingCard extends StatelessWidget {
   });
 
   void _share() {
+    // Share only the URL so the system share sheet's "Copy link"
+    // option copies the link itself, not a multi-line text blob.
+    // Descriptive context goes into the subject (used by email clients
+    // and surfaced as a preview by some apps).
     final isLost = listing.type == 'lost';
-    final intro = isLost
-        ? 'Lost item on campus — help find it!'
-        : 'Found item on campus — looking for the owner!';
+    final intro = isLost ? 'Lost item' : 'Found item';
     final url =
         'https://campus-lost-found-68e7d.web.app/listing/${listing.id}';
-    final msg = '$intro\n\n'
-        '"${listing.title}"\n'
-        '${listing.description}\n'
-        '📍 ${listing.location}\n\n'
-        '$url';
-    Share.share(msg, subject: listing.title);
+    Share.share(
+      url,
+      subject: '$intro: ${listing.title}',
+    );
   }
 
   @override

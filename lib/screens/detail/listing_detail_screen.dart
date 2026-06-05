@@ -3,7 +3,12 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+// google_maps_flutter is kept only for its LatLng type (used by the
+// `_campusCoords` lookup) — Marker is hidden so it doesn't collide with
+// flutter_map's Marker, which is what we now use for the preview.
+import 'package:google_maps_flutter/google_maps_flutter.dart' hide Marker;
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart' as ll;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../models/listing_model.dart';
@@ -83,18 +88,20 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
     );
   }
   Future<void> _share() async {
+    // Share ONLY the URL as the body — that way the system share sheet
+    // recognises it as a link and the "Copy link" option copies just the
+    // URL instead of a multi-line text blob. The title goes into the
+    // subject (used by email clients) and the description tags along
+    // inside the subject so receivers still get context in apps that
+    // surface it (WhatsApp preview, mail).
     final isLost = widget.listing.type == 'lost';
-    final intro = isLost
-        ? 'Lost item on campus — help find it!'
-        : 'Found item on campus — looking for the owner!';
+    final intro = isLost ? 'Lost item' : 'Found item';
     final url =
         'https://campus-lost-found-68e7d.web.app/listing/${widget.listing.id}';
-    final msg = '$intro\n\n'
-        '"${widget.listing.title}"\n'
-        '${widget.listing.description}\n'
-        '📍 ${widget.listing.location}\n\n'
-        '$url';
-    await Share.share(msg, subject: widget.listing.title);
+    await Share.share(
+      url,
+      subject: '$intro: ${widget.listing.title}',
+    );
   }
 
   Future<void> _confirmDelete() async {
@@ -214,53 +221,58 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                     ),
                     const SizedBox(height: 12),
 
-                    // Context banner — explains what kind of post this is
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: (isLost
-                                ? const Color(0xFFFF6B6B)
-                                : const Color(0xFF4CAF50))
-                            .withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
+                    // Context banner — explains what kind of post this is.
+                    // Hidden for the listing's own owner because they know
+                    // what their own post is about; the third-person
+                    // "Someone lost this item" reads awkwardly to them.
+                    if (!isOwner) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
                           color: (isLost
                                   ? const Color(0xFFFF6B6B)
                                   : const Color(0xFF4CAF50))
-                              .withOpacity(0.3),
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            isLost
-                                ? Icons.search_rounded
-                                : Icons.emoji_objects_outlined,
-                            size: 18,
-                            color: isLost
-                                ? const Color(0xFFFF6B6B)
-                                : const Color(0xFF4CAF50),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              isLost
-                                  ? 'Someone lost this item — help them find it.'
-                                  : 'Someone found this item — is it yours?',
-                              style: textTheme.bodySmall?.copyWith(
-                                fontWeight: FontWeight.w600,
-                                color: isLost
+                              .withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: (isLost
                                     ? const Color(0xFFFF6B6B)
-                                    : const Color(0xFF4CAF50),
+                                    : const Color(0xFF4CAF50))
+                                .withOpacity(0.3),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              isLost
+                                  ? Icons.search_rounded
+                                  : Icons.emoji_objects_outlined,
+                              size: 18,
+                              color: isLost
+                                  ? const Color(0xFFFF6B6B)
+                                  : const Color(0xFF4CAF50),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                isLost
+                                    ? 'Someone lost this item — help them find it.'
+                                    : 'Someone found this item — is it yours?',
+                                style: textTheme.bodySmall?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                  color: isLost
+                                      ? const Color(0xFFFF6B6B)
+                                      : const Color(0xFF4CAF50),
+                                ),
                               ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 16),
+                      const SizedBox(height: 16),
+                    ],
 
                     Text(widget.listing.title, style: textTheme.displayMedium),
                     const SizedBox(height: 16),
@@ -359,10 +371,6 @@ class _LocationMapCard extends StatefulWidget {
 }
 
 class _LocationMapCardState extends State<_LocationMapCard> {
-  GoogleMapController? _mapController;
-
-  @override
-  void dispose() { _mapController?.dispose(); super.dispose(); }
 
   Future<void> _openInGoogleMaps() async {
     final lat = widget.coords.latitude;
@@ -372,10 +380,17 @@ class _LocationMapCardState extends State<_LocationMapCard> {
     // Android and iOS. The OS routes it to the installed Maps app, and
     // falls back to the browser if Maps is not installed.
     // https://developers.google.com/maps/documentation/urls/get-started
+    // Try a few URL formats in order. The generic `geo:` URI is
+    // honoured by every Android map app (Google Maps, OsmAnd, Maps.me,
+    // HERE WeGo etc.). The OpenStreetMap web URL is a safe browser
+    // fallback that works everywhere — important for Northern Cyprus
+    // where Google's coverage is patchy.
     final candidates = <Uri>[
+      Uri.parse('geo:$lat,$lng?q=$lat,$lng(${Uri.encodeComponent(widget.locationName)})'),
       Uri.parse(
           'https://www.google.com/maps/search/?api=1&query=$lat%2C$lng'),
-      Uri.parse('geo:$lat,$lng?q=$lat,$lng'),
+      Uri.parse(
+          'https://www.openstreetmap.org/?mlat=$lat&mlon=$lng#map=17/$lat/$lng'),
     ];
 
     for (final uri in candidates) {
@@ -400,11 +415,6 @@ class _LocationMapCardState extends State<_LocationMapCard> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final marker = Marker(
-      markerId: const MarkerId('listing_location'),
-      position: widget.coords,
-      infoWindow: InfoWindow(title: widget.locationName),
-    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -442,26 +452,48 @@ class _LocationMapCardState extends State<_LocationMapCard> {
                 border: Border.all(color: scheme.outline.withOpacity(0.4)),
                 borderRadius: BorderRadius.circular(16),
               ),
-              // Wrap the map in IgnorePointer so taps go to the parent
-              // GestureDetector instead of being swallowed by the map.
-              // This lets the whole card act as an "open in Maps" button.
+              // Render the preview with flutter_map + OpenStreetMap
+              // tiles. OSM covers Northern Cyprus properly (Google's
+              // tile data is patchy here) and needs no API key. The
+              // widget is wrapped in IgnorePointer so the parent
+              // GestureDetector still gets the tap → Open in Maps.
               child: Stack(
                 children: [
-                  IgnorePointer(
-                    child: GoogleMap(
-                      initialCameraPosition: CameraPosition(
-                          target: widget.coords, zoom: 16),
-                      markers: {marker},
-                      myLocationButtonEnabled: false,
-                      zoomControlsEnabled: false,
-                      mapToolbarEnabled: false,
-                      liteModeEnabled: true,
-                      onMapCreated: (controller) {
-                        _mapController = controller;
-                        if (widget.isDark) {
-                          controller.setMapStyle(_darkMapStyle);
-                        }
-                      },
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: FlutterMap(
+                        options: MapOptions(
+                          initialCenter: ll.LatLng(
+                              widget.coords.latitude, widget.coords.longitude),
+                          initialZoom: 16,
+                          interactionOptions: const InteractionOptions(
+                            flags: InteractiveFlag.none,
+                          ),
+                        ),
+                        children: [
+                          TileLayer(
+                            urlTemplate:
+                                'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                            userAgentPackageName:
+                                'com.example.campus_lf_new',
+                          ),
+                          MarkerLayer(
+                            markers: [
+                              Marker(
+                                point: ll.LatLng(widget.coords.latitude,
+                                    widget.coords.longitude),
+                                width: 40,
+                                height: 40,
+                                child: const Icon(
+                                  Icons.location_on,
+                                  color: Colors.red,
+                                  size: 36,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                   // Hint overlay so users know the map is tappable
@@ -501,8 +533,6 @@ class _LocationMapCardState extends State<_LocationMapCard> {
     );
   }
 }
-
-const String _darkMapStyle = '[{"elementType":"geometry","stylers":[{"color":"#1d2c4d"}]},{"elementType":"labels.text.fill","stylers":[{"color":"#8ec3b9"}]},{"elementType":"labels.text.stroke","stylers":[{"color":"#1a3646"}]},{"featureType":"road","elementType":"geometry","stylers":[{"color":"#304a7d"}]},{"featureType":"water","elementType":"geometry","stylers":[{"color":"#0e1626"}]}]';
 
 class _Badge extends StatelessWidget {
   final String label;

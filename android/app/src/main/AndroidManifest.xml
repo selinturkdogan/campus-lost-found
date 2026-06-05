@@ -15,7 +15,7 @@
 
         <meta-data
             android:name="com.google.android.geo.API_KEY"
-            android:value="AIzaSyDFKUUPrrIsY1Ne6IGJ58ir7A4UXgBI4xI"/>
+            android:value="AIzaSyDFKUUPrrIsY1Ne6lGJ58ir7A4UXgBI4xI"/>
 
         <!-- FCM default notification channel -->
         <meta-data
@@ -43,6 +43,13 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
+
+        <!-- Disable Impeller renderer: it has known incompatibilities with
+             google_maps_flutter in lite mode (tiles render as blank/blue
+             on some Android devices). Falls back to Skia which works fine. -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false"/>
     </application>
 
     <queries>

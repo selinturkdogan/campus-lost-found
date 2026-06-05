@@ -159,18 +159,16 @@ exports.sendTempPassword = onCall(
 
     const auth = getAuth();
 
-    // 3) If this user has already completed first-time setup (i.e. they
-    //    chose their own password), refuse to reset it here. They must use
-    //    the normal email + password sign-in, or "Forgot password" if they
-    //    actually forgot it. This prevents accidental password resets when
-    //    a returning user taps "Continue with Google" by mistake.
+    // 3) If this user has already completed first-time setup, DON'T send
+    //    a new temp password. Instead return early with a flag so the
+    //    client knows the Google session is already a valid sign-in and
+    //    it can simply navigate to the home screen. This lets returning
+    //    users skip the email/password step entirely when they tap
+    //    "Continue with Google".
     const usersRef = db.collection("users").doc(request.auth.uid);
     const userSnap = await usersRef.get();
     if (userSnap.exists && userSnap.data().mustChangePassword === false) {
-      throw new HttpsError(
-        "already-exists",
-        "You already have an account. Please sign in with your email and password, or use 'Forgot password' if you need to reset it."
-      );
+      return { success: true, alreadyRegistered: true, email };
     }
 
     // 4) Rate limit: 1 request per 60 seconds per email

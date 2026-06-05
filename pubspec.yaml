@@ -11,6 +11,11 @@ dependencies:
     sdk: flutter
   
   google_maps_flutter: ^2.5.0
+  # OpenStreetMap-based map widget. Works in regions where Google Maps
+  # tile coverage is poor (e.g. Northern Cyprus), needs no API key, and
+  # bypasses the Maps SDK lite-mode / certificate issues.
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
   firebase_messaging: ^14.9.4
   flutter_local_notifications: ^17.2.2
 
